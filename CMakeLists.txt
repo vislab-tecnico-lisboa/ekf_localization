@@ -14,7 +14,8 @@ find_package(catkin REQUIRED
   sensor_msgs
   std_msgs
   tf
-  tf_conversions)
+  tf_conversions
+pcl_ros)
 
 catkin_package(
 #  INCLUDE_DIRS include
@@ -44,5 +45,5 @@ add_executable(ekf_localization_node src/bayesian_filtering/test/BayesianFilterN
 target_link_libraries(ekf_localization_node pose_estimation_ekf ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${BFL_LIBRARIES})
 add_dependencies(ekf_localization_node ekf_localization_node_gencpp)
 
-add_executable(ekf_localization_test src/main.cpp src/kalman.cpp)
+add_executable(ekf_localization_test src/main.cpp src/kalman.cpp src/featuresextractor.cpp)
 target_link_libraries(ekf_localization_test ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${Boost_LIBRARIES})

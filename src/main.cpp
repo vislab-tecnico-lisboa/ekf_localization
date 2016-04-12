@@ -16,9 +16,11 @@ int main(int argc, char *argv[])
         std::cout << "No Input Image!" << std::endl;
 
 
-    const cv::Mat map = cv::imread(argv[1], CV_LOAD_IMAGE_ANYCOLOR);
+    //const cv::Mat map = cv::imread(argv[1], CV_LOAD_IMAGE_ANYCOLOR);
+    const cv::Mat map = cv::imread(argv[1], cv::IMREAD_GRAYSCALE);
+
     std::cout << argv[1]<< std::endl;
-    const int spin_rate = 10;
+    const int spin_rate = 50;
 
     cv::namedWindow(name);
     double init_x, init_y, init_theta;
@@ -45,6 +47,7 @@ int main(int argc, char *argv[])
         covMatrix(1,0)=Q(1,0);
         covMatrix(1,1)=Q(1,1);
         k.drawCovariance(mean,covMatrix);
+        k.publishFeatures();
         //k.correct();
         //k.show_map(name,true);
         k.broadcast();

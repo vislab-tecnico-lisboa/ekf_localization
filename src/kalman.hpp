@@ -14,8 +14,16 @@
 #include <Eigen/Core>
 #include <Eigen/Eigen>
 #include <visualization_msgs/Marker.h>
-//#include <tf/LinearMath/btMatrix3x3.h>
-//#include <tf/LinearMath/btQuaternion.h>
+#include "featuresextractor.h"
+
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl_ros/publisher.h>
+#include <pcl_ros/point_cloud.h>
+#include <pcl/common/transforms.h>
+#include <tf/transform_listener.h>
+#include <pcl_ros/transforms.h>
+#include <pcl_conversions/pcl_conversions.h>
 
 struct rangle
 {
@@ -25,19 +33,28 @@ struct rangle
 
 class kalman
 {
+    boost::shared_ptr<tf::TransformListener> listener;
+
+    Eigen::Matrix4f laserToMap;
+    FeaturesExtractor features_extractor;
     std::string base_link;
     std::string odom_link;
     std::string map_link;
-	const cv::Mat map;
-	const double dt;
+    std::string laser_link;
+    cv::Mat map;
+    double dt;
 	double gt_x, gt_y, gt_theta;
 	double linear, angular;
     ros::Subscriber cmd_sub;
     ros::Subscriber laser_sub;
     ros::Subscriber bpgt_sub;
     ros::Publisher location_undertainty;
+    ros::Publisher map_features_pub;
+    ros::Publisher local_features_pub;
+
     tf::TransformBroadcaster tf_broadcaster;
-	std::vector<rangle> laser;
+    pcl::PointCloud<pcl::PointXYZRGB> laser;
+
 
     cv::Vec3d X;           //!< predicted state (x'(k)): x(k)=A*x(k-1)+B*u(k)
     cv::Matx<double,3,3> F;   				//!< state transition matrix (F)
@@ -47,8 +64,15 @@ class kalman
     //cv::Mat measurementNoiseCov;//!< measurement noise covariance matrix (R)
     cv::Matx<double,3,3> K;               //!< Kalman gain matrix (K(k)): K(k)=P'(k)*Ht*inv(H*P'(k)*Ht+R)
 	cv::Matx<double,3,3> P;
+    pcl::PointCloud<pcl::PointXYZRGB> map_features;
 
 public:
+
+    void publishFeatures()
+    {
+        map_features_pub.publish(map_features);
+    }
+
     cv::Vec3d getX()
     {
         return X;
@@ -60,6 +84,8 @@ public:
     }
 
     void drawCovariance(const Eigen::Vector2f& mean, const Eigen::Matrix2f& covMatrix);
+    void drawFeatures();
+
 	kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate);
     void broadcast();
 
@@ -74,7 +100,7 @@ public:
     cv::Point2d toStage(cv::Point2i p) const;
     cv::Point2i toImage(cv::Point2d p) const;
 
-	cv::Mat show_map(const std::string& win_name, bool draw) const;
+    //cv::Mat show_map(const std::string& win_name, bool draw) const;
 
     enum {OCCUPIED = 0, FREE = 255};
 	const static int CV_TYPE = CV_64F;

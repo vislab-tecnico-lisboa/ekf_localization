@@ -1,17 +1,22 @@
 #include "kalman.hpp"
 
 kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate)
-    : map(pmap.clone()), dt(1.0/(double)spin_rate), linear(0), angular(0)
+    : map(pmap.clone()), dt(1.0/(double)spin_rate), linear(0), angular(0),
+      listener(new tf::TransformListener(ros::Duration(10.0)))
+
 {
 
     this->cmd_sub = nh.subscribe("odom", 1, &kalman::predict, this);
     this->laser_sub = nh.subscribe("scan", 1, &kalman::laser_callback, this);
     this->bpgt_sub = nh.subscribe("base_pose_ground_truth", 1, &kalman::pose_callback, this);
     this->location_undertainty = nh.advertise<visualization_msgs::Marker>("/location_undertainty",1);
+    this->map_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/map_features",1);
+    this->local_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/local_features",1);
 
-    base_link="base_link";
-    odom_link="odom";
-    map_link="map";
+    base_link="/base_link";
+    odom_link="/odom";
+    map_link="/map";
+    laser_link="/laser_frame";
 
     this->X[0] = x_init;
     this->X[1] = y_init;
@@ -36,30 +41,71 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     //Bound image by occupied cells.
     std::cout << this->map.size() << std::endl;
     this->map.row(0) = cv::Scalar(0);
-    std::cout << "aqui2"<< std::endl;
 
     this->map.row(map.size().width - 1) = cv::Scalar(0);
     this->map.col(0) = cv::Scalar(0);
     this->map.col(map.size().height - 1)  = cv::Scalar(0);
+
+    std::vector<cv::Point2f> map_features_cv=features_extractor.mapFeatures(this->map);
+    map_features.resize(map_features_cv.size());
+    map_features.header.frame_id="map";
+    pcl::PointXYZRGB point=pcl::PointXYZRGB(255, 0, 0);
+
+    double map_scale=0.05;
+    for(unsigned int i=0; i<map_features_cv.size();++i)
+    {
+        point.x=map_scale*map_features_cv[i].x;
+        point.y=-map_scale*map_features_cv[i].y;
+        point.z=0.0;
+        map_features[i]=point;
+    }
 }
 
 
-void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg){
-    const int size = (msg->angle_max - msg->angle_min) / msg->angle_increment;
+void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
+{
+    //const int size = (msg->angle_max - msg->angle_min) / msg->angle_increment;
+    laser.resize(msg->ranges.size());
+    laser.header.frame_id=laser_link;
+    pcl_conversions::toPCL(ros::Time::now(), laser.header.stamp);
 
-    laser.clear();
+    pcl::PointXYZRGB point=pcl::PointXYZRGB(0, 0, 255);
+    double step=msg->angle_increment;
 
-    //double step=msg->angle_increment;
-//    for(int i=0; i< msg->ranges.size();++i)
-//    {
-//        laser.push_back( rangle(msg->ranges[i], msg->angle_min+(double)step*i));
-//        std::cout << msg->angle_min+(double)step*i << std::endl;
-//    }
+    for(int i=0; i< msg->ranges.size();++i)
+    {
+        double angle_=msg->angle_min+(double)step*i;
+        point.x = msg->ranges[i]*cos(angle_);
+        point.y = msg->ranges[i]*sin(angle_);
+        point.z = 0.0;
+        laser[i]=point;
+    }
 
+    Eigen::Matrix4f laserToBaseEigen;
+    tf::StampedTransform laserToBaseTf;
+    ros::Time current_time = ros::Time(0);
 
-    laser.push_back( rangle(msg->ranges[0], msg->angle_min));
-    laser.push_back( rangle(msg->ranges[size-1], msg->angle_max));
-    laser.push_back( rangle(msg->ranges[size/2], 0));
+    try
+    {
+
+        listener->waitForTransform(map_link, laser_link, current_time, ros::Duration(1.0) );
+        listener->lookupTransform(map_link, laser_link, current_time, laserToBaseTf); // ABSOLUTE EGO TO WORLD
+    }
+    catch(tf::TransformException& ex)
+    {
+        //ROS_ERROR_STREAM( "Transform error: " << ex.what() << ", quitting callback");
+        return;
+    }
+
+    pcl_ros::transformAsMatrix(laserToBaseTf, laserToBaseEigen);
+
+    pcl::PointCloud<pcl::PointXYZRGB> laser_out;
+    pcl::transformPointCloud (laser, laser_out, laserToBaseEigen);
+    laser_out.is_dense=false;
+    laser_out.header.frame_id=map_link;
+    pcl_conversions::toPCL(ros::Time::now(), laser_out.header.stamp);
+
+    local_features_pub.publish(laser_out);
     return;
 }
 
@@ -85,7 +131,7 @@ void kalman::predict(const nav_msgs::Odometry msg)
     this->F(0,2) = -linear * dt * sin( X[2] ); //t+1 ?
     this->F(1,2) =  linear * dt * cos( X[2] ); //t+1 ?
 
-        std::cout << "F" << std::endl << cv::Mat(F) << std::endl;
+    std::cout << "F" << std::endl << cv::Mat(F) << std::endl;
     //	std::cout << "P" << std::endl << cv::Mat(P) << std::endl;
     P = F * P * F.t() + Q;
     P = (P + P.t()) * 0.5;
@@ -93,14 +139,13 @@ void kalman::predict(const nav_msgs::Odometry msg)
     //	std::cout << "P" << std::endl << cv::Mat(P) << std::endl;
 
     this->linear = msg.twist.twist.linear.x;
-
     this->angular = msg.twist.twist.angular.z;
 
     return;
 }
 
-void kalman::correct(){
-
+void kalman::correct()
+{
     const double x = this->X[0];
     const double y = this->X[1];
     const double theta = this->X[2];
@@ -110,14 +155,14 @@ void kalman::correct(){
 
     cv::Vec3d res;
 
-    for(size_t i = 0; i < laser.size(); i++)
+    /*for(size_t i = 0; i < laser.size(); i++)
     {
         const double angle = laser[i].angle;
         res[i] = laser[i].range - ray_trace(x,y,theta, angle);
         this->H(i,0) = (ray_trace(x+dx,y,theta,angle) - ray_trace(x-dx,y,theta,angle) ) / 2*dx;
         this->H(i,1) = (ray_trace(x,y+dy,theta,angle) - ray_trace(x,y-dy,theta,angle) ) / 2*dy;
         this->H(i,2) = (ray_trace(x,y,theta+dtheta,angle) - ray_trace(x,y,theta-dtheta,angle) ) / 2*dtheta;
-    }
+    }*/
     std::cout << std::endl << "res" << cv::Point3d(res) << std::endl;
     //	std::cout << std::endl << "H" << cv::Mat(H) << std::endl;
 
@@ -147,7 +192,9 @@ void kalman::broadcast()
 }
 
 double kalman::ray_trace(const double x, const double y, const double theta, const double angle) const
-{//const double y, const double theta, const double range, const double angle){
+{
+
+    //const double y, const double theta, const double range, const double angle){
     //std::cout << "Range: " << range << " Angle: " << angle << std::endl;
     const double range = 4.0;
 
@@ -200,8 +247,7 @@ cv::Point2i kalman::toImage(cv::Point2d p) const
     return cv::Point2i (x,y);
 }
 
-
-cv::Mat kalman::show_map(const std::string& win_name, bool draw) const {
+/*cv::Mat kalman::show_map(const std::string& win_name, bool draw) const {
     cv::Mat clone = this->map.clone();
 
     const cv::Point2d p(X[0], X[1]);
@@ -214,7 +260,7 @@ cv::Mat kalman::show_map(const std::string& win_name, bool draw) const {
         cv::waitKey(10);
     }
     return clone;
-}
+}*/
 
 void kalman::drawCovariance(const Eigen::Vector2f& mean, const Eigen::Matrix2f& covMatrix)
 {
