@@ -24,7 +24,8 @@
 #include <tf/transform_listener.h>
 #include <pcl_ros/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
-
+#include <pcl/registration/icp.h>
+#include <pcl/registration/icp_nl.h>
 struct rangle
 {
 	double range, angle;
@@ -33,9 +34,12 @@ struct rangle
 
 class kalman
 {
+    typedef pcl::PointXYZI point_type;
     boost::shared_ptr<tf::TransformListener> listener;
 
-    Eigen::Matrix4f laserToMap;
+    Eigen::Matrix4f laserToMapEigen;
+    Eigen::Matrix4f laserToBaseEigen;
+
     FeaturesExtractor features_extractor;
     std::string base_link;
     std::string odom_link;
@@ -53,7 +57,7 @@ class kalman
     ros::Publisher local_features_pub;
 
     tf::TransformBroadcaster tf_broadcaster;
-    pcl::PointCloud<pcl::PointXYZRGB> laser;
+    pcl::PointCloud<point_type> laser;
 
 
     cv::Vec3d X;           //!< predicted state (x'(k)): x(k)=A*x(k-1)+B*u(k)
@@ -64,7 +68,8 @@ class kalman
     //cv::Mat measurementNoiseCov;//!< measurement noise covariance matrix (R)
     cv::Matx<double,3,3> K;               //!< Kalman gain matrix (K(k)): K(k)=P'(k)*Ht*inv(H*P'(k)*Ht+R)
 	cv::Matx<double,3,3> P;
-    pcl::PointCloud<pcl::PointXYZRGB> map_features;
+    cv::Matx<double,3,3> R;
+    pcl::PointCloud<point_type>::Ptr map_features;
 
 public:
 
@@ -95,7 +100,7 @@ public:
 	double ray_trace(const double x, const double y, const double theta, const double angle) const;
 
 	void predict(const nav_msgs::Odometry msg);
-	void correct();
+    void correct(const cv::Vec3d & obs);
 
     cv::Point2d toStage(cv::Point2i p) const;
     cv::Point2i toImage(cv::Point2d p) const;

@@ -11,20 +11,24 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/video/tracking.hpp>
 #include <pcl/keypoints/harris_3d.h>
+
 class FeaturesExtractor
 {
+
+
 public:
+    typedef pcl::PointXYZI point_type;
     FeaturesExtractor();
 
     std::vector<cv::Point2f> mapFeatures(cv::Mat & map,
                                          const int & maxCorners=50,
                                          const double & qualityLevel=0.001,
-                                         const double & minDistance=5.0,
+                                         const double & minDistance=1.0,
                                          const int & blockSize=3,
                                          const bool & useHarrisDetector=false,
                                          const double & k = 0.04);
 
-    std::vector<cv::Point2f> localFeatures(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr point_cloud_in);
+    pcl::PointCloud<point_type>::Ptr localFeatures(const pcl::PointCloud<point_type>::Ptr point_cloud_in);
 };
 
 #endif // FEATURESEXTRACTOR_H
