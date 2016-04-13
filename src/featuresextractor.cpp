@@ -12,26 +12,30 @@ std::vector<cv::Point2f> FeaturesExtractor::mapFeatures(cv::Mat & map,
                                                         const bool & useHarrisDetector,
                                                         const double & k)
 {
+    //Extracted Points
     std::vector<cv::Point2f> corners;
-    //Good Features
 
-    cv::goodFeaturesToTrack( map,corners,1000000,qualityLevel,minDistance,cv::Mat(),blockSize,useHarrisDetector,k );
+    //Extract Map Points
 
-
-    //Show results
-    for( int i = 0; i < corners.size(); i++ )
+    for(int ii=1;ii<(map.rows)-1;ii++)
     {
-        //cv::circle( map, corners[i], 10, cv::Scalar(250,0,0), -1, 8, 0 );
-        corners[i].x-=map.cols/2.0;
-        corners[i].y-=map.rows/2.0;
+        for(int jj=1;jj<(map.cols)-1;jj++)
+        {
+            if((cv::Point3i(map.at<cv::Vec3b>(ii,jj)).x==0) && (cv::Point3i(map.at<cv::Vec3b>(ii,jj)).y==0) && (cv::Point3i(map.at<cv::Vec3b>(ii,jj)).z==0))
+            {
+                corners.push_back(cv::Point(jj,ii));
+            }
+        }
     }
 
+    //Scale
+    for(int gp=0;gp<corners.size();gp++)
+    {
+        corners[gp].x-=map.cols/2.0;
+        corners[gp].y-=map.rows/2.0;
+    }
 
-    //Show results
-    //cv::imshow("TESTE",map);
-    //cv::waitKey();
-
-    return corners;
+   return corners;
 }
 
 pcl::PointCloud<pcl::PointXYZI>::Ptr FeaturesExtractor::localFeatures(const pcl::PointCloud<point_type>::Ptr point_cloud_in)

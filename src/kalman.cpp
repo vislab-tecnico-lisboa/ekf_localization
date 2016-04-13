@@ -3,7 +3,9 @@
 kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate)
     : map(pmap.clone()), dt(1.0/(double)spin_rate), linear(0), angular(0),
       listener(new tf::TransformListener(ros::Duration(10.0))),
-      map_features(new pcl::PointCloud<point_type>())
+      map_features(new pcl::PointCloud<point_type>()),
+      laser(new pcl::PointCloud<point_type>())
+
 
 {
 
@@ -35,17 +37,19 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     this->P(1,1) = 1;
     this->P(2,2) = 1;
 
-    this->Q(0,0) = 1/10000.0;
-    this->Q(1,1) = 1/10000.0;
-    this->Q(2,2) = 1/10000.0;
+    // odometry cov
+    this->Q(0,0) = 0.1;
+    this->Q(1,1) = 0.1;
+    this->Q(2,2) = 0.1;
 
+    // obs model
     this->H(0,0) = 1;
     this->H(1,1) = 1;
     this->H(2,2) = 1;
-
-    this->R(0,0) = 0.1;
-    this->R(1,1) = 0.1;
-    this->R(2,2) = 0.1;
+    // laser cov
+    this->R(0,0) = 0.01;
+    this->R(1,1) = 0.01;
+    this->R(2,2) = 0.01;
     //Bound image by occupied cells.
     //std::cout << this->map.size() << std::endl;
     this->map.row(0) = cv::Scalar(0);
@@ -75,7 +79,6 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     {
         try
         {
-
             listener->waitForTransform(base_link, laser_link, ros::Time(0), ros::Duration(1.0) );
             listener->lookupTransform(base_link, laser_link, ros::Time(0), laserToBaseTf); // ABSOLUTE EGO TO WORLD
         }
@@ -93,10 +96,14 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
 
 void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 {
+    laser_time=msg->header.stamp;
+    // subtracting base to odom from map to base and send map to odom instead
+
     //const int size = (msg->angle_max - msg->angle_min) / msg->angle_increment;
-    laser.resize(msg->ranges.size());
-    laser.header.frame_id=laser_link;
-    pcl_conversions::toPCL(ros::Time::now(), laser.header.stamp);
+    laser->resize(msg->ranges.size());
+    laser->header.frame_id=laser_link;
+    laser->is_dense=false;
+    pcl_conversions::toPCL(ros::Time::now(), laser->header.stamp);
 
     point_type point;//=point_type(0, 0, 255);
     double step=msg->angle_increment;
@@ -108,13 +115,14 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         point.y = msg->ranges[i]*sin(angle_);
         point.z = 0.0;
         point.intensity=1.0;
-        laser[i]=point;
+        (*laser)[i]=point;
     }
+    pcl::PointIndices::Ptr inliers (new pcl::PointIndices ());
 
+    pcl::removeNaNFromPointCloud((*laser), *laser,inliers->indices);
     tf::StampedTransform laserToMapTf;
-    ros::Time current_time = ros::Time(0);
 
-    // Transform to map frame
+    // Transform to laser scan to map frame
     try
     {
 
@@ -123,48 +131,57 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     }
     catch(tf::TransformException& ex)
     {
-        //ROS_ERROR_STREAM( "Transform error: " << ex.what() << ", quitting callback");
         return;
     }
 
+    // Downsample
+    double voxel_grid_size=0.60;
+    pcl::VoxelGrid<point_type> voxel_grid;
+    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
+    voxel_grid.setInputCloud (laser);
+    voxel_grid.filter (*laser);
+    voxel_grid.setInputCloud (map_features);
+    voxel_grid.filter (*map_features);
+
     pcl_ros::transformAsMatrix(laserToMapTf, laserToMapEigen);
     pcl::PointCloud<point_type>::Ptr laser_map (new pcl::PointCloud<point_type>());
-    pcl::transformPointCloud (laser, *laser_map, laserToMapEigen);
+    pcl::transformPointCloud (*laser, *laser_map, laserToMapEigen);
     laser_map->is_dense=false;
     laser_map->header.frame_id=map_link;
     pcl_conversions::toPCL(ros::Time::now(), laser_map->header.stamp);
 
-    // Extract features with harris corner detector
-    //pcl::PointCloud<point_type>::Ptr features_cloud=features_extractor.localFeatures(laser_map);
-
     // Compute ICP
-
     pcl::IterativeClosestPointNonLinear<point_type, point_type> icp;
-    icp.setInputCloud(laser_map);
+    icp.setInputSource(laser_map);
     icp.setInputTarget(map_features);
-    icp.setTransformationEpsilon (1e-6);
-    icp.setMaxCorrespondenceDistance (0.03);
-    icp.setMaximumIterations(100);
-    icp.setRANSACIterations (100);
+    //icp.setTransformationEpsilon (1e-6);
+    icp.setMaxCorrespondenceDistance (10.0);
+    //icp.setMaximumIterations(50);
+    icp.setRANSACIterations (50);
 
     pcl::PointCloud<point_type> Final;
     icp.align(Final);
 
-    Final.header.frame_id=base_link;
+    Final.header.frame_id=map_link;
 
-    R(0,0)=icp.getFitnessScore();
-    R(1,1)=icp.getFitnessScore();
-    R(2,2)=icp.getFitnessScore();
+    //R(0,0)=icp.getFitnessScore();
+    //R(1,1)=icp.getFitnessScore();
+    //R(2,2)=icp.getFitnessScore();
     Eigen::Matrix4f correction_transform_map_frame=icp.getFinalTransformation();
     Eigen::Matrix4f correction_transform_=correction_transform_map_frame.inverse();
 
-    //pcl::PointXYZINormal
+    std::cout << correction_transform_ << std::endl;
     cv::Vec3d obs;
     obs[0]=correction_transform_(0,3);
     obs[1]=correction_transform_(1,3);
     obs[2]=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2);
+    angleOverflowCorrect(obs[2]);
+
     correct(obs);
-    local_features_pub.publish(Final);
+    std::cout << "obs:"<< obs << std::endl;
+    pcl::transformPointCloud (*laser_map, *laser_map, correction_transform_);
+
+    local_features_pub.publish(laser_map);
     return;
 }
 
@@ -206,17 +223,17 @@ void kalman::predict(const nav_msgs::Odometry msg)
 void kalman::correct(const cv::Vec3d & obs)
 {
 
-    std::cout << "obs:"<< obs<< std::endl;
-    std::cout << "state:"<< X<< std::endl;
+    //std::cout << "obs:"<< obs<< std::endl;
+    //std::cout << "state:"<< X<< std::endl;
 
     cv::Vec3d res;
-    res = obs-X;
+    res = obs;
     std::cout << "res:"<< res<< std::endl;
 
     cv::Matx<double,3,3> S = H * P * H.t() + R;
     cv::Matx<double,3,3> K = P * H.t() * S.inv();
 
-    std::cout << std::endl << "K" << cv::Mat(K) << std::endl;
+    //std::cout << std::endl << "K" << cv::Mat(K) << std::endl;
 
     X += K*res;
 
@@ -230,60 +247,43 @@ void kalman::correct(const cv::Vec3d & obs)
 
 void kalman::broadcast()
 {
-    tf::Transform transform;
-    transform.setOrigin( tf::Vector3(this->X[0], this->X[1], 0.0) );
-    tf::Quaternion q;
-    q.setRPY(0, 0, this->X[2]);
-    transform.setRotation(q);
-    tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "base_link", "map"));
-}
-
-double kalman::ray_trace(const double x, const double y, const double theta, const double angle) const
-{
-
-    //const double y, const double theta, const double range, const double angle){
-    //std::cout << "Range: " << range << " Angle: " << angle << std::endl;
-    const double range = 4.0;
-
-    const cv::Point2i robot = this->toImage( cv::Point2d(x, y) ); //Get Robot's Esitimated position.
-
-    const double laser_x = range * cos(theta + angle);
-    const double laser_y = range * sin(theta + angle);
-
-    const cv::Point2d stage_exp(x + laser_x, y + laser_y);
-    const cv::Point2i map_expected = this->toImage(stage_exp);
-
-    cv::LineIterator lit(this->map, robot, map_expected);
-    if(lit.count == -1 || lit.step == 0)
+    tf::Stamped<tf::Pose> odom_to_map;
+    try
     {
-        std::cout << "LINE ERROR";
-        return range;
+        tf::Transform tmp_tf(tf::createQuaternionFromYaw(this->X[2]),
+                tf::Vector3(this->X[0],
+                this->X[1],
+                0.0));
+        tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
+                                              laser_time,
+                                              base_link);
+        this->listener->transformPose(odom_link,
+                                      tmp_tf_stamped,
+                                      odom_to_map);
+    }
+    catch(tf::TransformException)
+    {
+        ROS_DEBUG("Failed to subtract base to odom transform");
+        return;
     }
 
-    cv::Point2d actual;
-    while(true)
-    { //Follow line until hit occupied cell. Bounded the image in ctor so can't loop forever.
-        if(*(*lit) == OCCUPIED)
-        {
-            actual = this->toStage( lit.pos() ); // Difference between estimated and expected.
-            break;
-        }
-        lit++;
-    }
-    const double dx = (x - actual.x);
-    const double dy = (y - actual.y);
-    return sqrt(dx*dx + dy*dy);
+    latest_tf_ = tf::Transform(tf::Quaternion(odom_to_map.getRotation()),
+                               tf::Point(odom_to_map.getOrigin()));
+
+    // We want to send a transform that is good up until a
+    // tolerance time so that odom can be used
+    ros::Time transform_expiration = (laser_time);
+    tf::StampedTransform tmp_tf_stamped(latest_tf_.inverse(),
+                                        ros::Time::now(),
+                                        map_link, odom_link);
+    tf_broadcaster.sendTransform(tmp_tf_stamped);
+
+    std::cout<< "broadcasting"<< std::endl;
 }
 
 
-cv::Point2d kalman::toStage(cv::Point2i p) const
-{
-    const double x_ratio = 50.0/map.size().width;
-    const double y_ratio = 50.0/map.size().height;
-    double x = p.x*x_ratio -25;
-    double y = -(p.y - map.size().height)*y_ratio -25;
-    return cv::Point2d(x,y);
-}
+
+
 
 cv::Point2i kalman::toImage(cv::Point2d p) const
 {
