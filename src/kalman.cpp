@@ -1,12 +1,12 @@
 #include "kalman.hpp"
 
-kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate)
+kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_)
     : map(pmap.clone()), dt(1.0/(double)spin_rate), linear(0), angular(0),
       listener(new tf::TransformListener(ros::Duration(10.0))),
       map_features(new pcl::PointCloud<point_type>()),
-      laser(new pcl::PointCloud<point_type>())
-
-
+      map_features_aux(new pcl::PointCloud<point_type>()),
+      laser(new pcl::PointCloud<point_type>()),
+      voxel_grid_size(voxel_grid_size_)
 {
 
     this->cmd_sub = nh.subscribe("odom", 1, &kalman::predict, this);
@@ -59,7 +59,7 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     this->map.col(map.size().height - 1)  = cv::Scalar(0);
 
     std::vector<cv::Point2f> map_features_cv=features_extractor.mapFeatures(this->map);
-    map_features->resize(map_features_cv.size());
+    map_features_aux->resize(map_features_cv.size());
     map_features->header.frame_id="map";
     point_type point;//=point_type(255, 0, 0);
 
@@ -69,12 +69,28 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
         point.x=map_scale*map_features_cv[i].x;
         point.y=-map_scale*map_features_cv[i].y;
         point.z=0.0;
-        (*map_features)[i]=point;
+        point.intensity=1.0;
+        (*map_features_aux)[i]=point;
     }
 
+    int step=10;
+    for(unsigned int i=0; i<map_features_cv.size();i=i+step)
+    {
+        point.x=map_scale*map_features_cv[i].x;
+        point.y=-map_scale*map_features_cv[i].y;
+        point.z=0.0;
+        point.intensity=1.0;
+        map_features->push_back(point);
+    }
+
+    pcl::VoxelGrid<point_type> voxel_grid;
+    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
+    voxel_grid.setInputCloud (map_features);
+    voxel_grid.filter (*map_features);
+
+    // Get Transform from laser to base frame
 
     tf::StampedTransform laserToBaseTf;
-    // Transform laser to base frame
     while(ros::ok())
     {
         try
@@ -135,13 +151,17 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     }
 
     // Downsample
-    double voxel_grid_size=0.60;
+
+//    pcl::RandomSample<point_type> sample(true);
+//    sample.setInputCloud(map_features);
+//    sample.setSample (10);
+//    // Indices
+//    std::vector<int> indices;
+//    sample.filter (indices);
     pcl::VoxelGrid<point_type> voxel_grid;
     voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
     voxel_grid.setInputCloud (laser);
     voxel_grid.filter (*laser);
-    voxel_grid.setInputCloud (map_features);
-    voxel_grid.filter (*map_features);
 
     pcl_ros::transformAsMatrix(laserToMapTf, laserToMapEigen);
     pcl::PointCloud<point_type>::Ptr laser_map (new pcl::PointCloud<point_type>());
@@ -151,7 +171,9 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     pcl_conversions::toPCL(ros::Time::now(), laser_map->header.stamp);
 
     // Compute ICP
-    pcl::IterativeClosestPointNonLinear<point_type, point_type> icp;
+    //pcl::IterativeClosestPointNonLinear<point_type, point_type> icp;
+    pcl::IterativeClosestPoint<point_type, point_type> icp;
+
     icp.setInputSource(laser_map);
     icp.setInputTarget(map_features);
     //icp.setTransformationEpsilon (1e-6);
@@ -168,7 +190,7 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     //R(1,1)=icp.getFitnessScore();
     //R(2,2)=icp.getFitnessScore();
     Eigen::Matrix4f correction_transform_map_frame=icp.getFinalTransformation();
-    Eigen::Matrix4f correction_transform_=correction_transform_map_frame.inverse();
+    Eigen::Matrix4f correction_transform_=correction_transform_map_frame;
 
     std::cout << correction_transform_ << std::endl;
     cv::Vec3d obs;
@@ -177,7 +199,7 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     obs[2]=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2);
     angleOverflowCorrect(obs[2]);
 
-    correct(obs);
+    //correct(obs);
     std::cout << "obs:"<< obs << std::endl;
     pcl::transformPointCloud (*laser_map, *laser_map, correction_transform_);
 
@@ -202,6 +224,7 @@ void kalman::predict(const nav_msgs::Odometry msg)
     this->X[1] += linear * dt * sin( X[2] ) + dy() * scale;
     this->X[2] += angular * dt + dtheta() * scale;
 
+    angleOverflowCorrect(this->X[2]);
     //std::cout << "X" << cv::Point3d(X) << std::endl;
 
     this->F(0,2) = -linear * dt * sin( X[2] ); //t+1 ?

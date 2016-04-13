@@ -72,7 +72,9 @@ class kalman
     cv::Matx<double,3,3> P;
     cv::Matx<double,3,3> R;
     pcl::PointCloud<point_type>::Ptr map_features;
+    pcl::PointCloud<point_type>::Ptr map_features_aux;
 
+    double voxel_grid_size;
 public:
 
     void publishFeatures()
@@ -93,7 +95,7 @@ public:
     void drawCovariance(const Eigen::Vector2f& mean, const Eigen::Matrix2f& covMatrix);
     void drawFeatures();
 
-    kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate);
+    kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_=0.02);
     void broadcast();
 
     void pose_callback(const nav_msgs::Odometry msg);

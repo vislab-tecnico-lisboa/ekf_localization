@@ -17,8 +17,7 @@ int main(int argc, char *argv[])
 
 
     //const cv::Mat map = cv::imread(argv[1], CV_LOAD_IMAGE_ANYCOLOR);
-    const cv::Mat map = cv::imread(argv[1], cv::IMREAD_GRAYSCALE);
-
+    const cv::Mat map = cv::imread(argv[1]);
     std::cout << argv[1]<< std::endl;
     const int spin_rate = 50;
 
