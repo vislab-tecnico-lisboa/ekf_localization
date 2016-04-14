@@ -103,7 +103,7 @@ public:
     void drawCovariance(const Eigen::Vector2f& mean, const Eigen::Matrix2f& covMatrix);
     void drawFeatures();
 
-    kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_=0.02);
+    kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_=0.005);
     void broadcast();
 
     void pose_callback(const nav_msgs::Odometry msg);

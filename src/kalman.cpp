@@ -49,19 +49,19 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     this->P(2,2) = 1;
 
     // odometry cov
-    this->Q(0,0) = 0.1;
-    this->Q(1,1) = 0.1;
+    this->Q(0,0) = 0.01;
+    this->Q(1,1) = 0.01;
 
     //this->Q(0,1) = 0.00001;
     //this->Q(1,0) = 0.00001;
 
-    this->Q(0,2) = 0.05;
-    this->Q(1,2) = 0.05;
+    this->Q(0,2) = 0.02;
+    this->Q(1,2) = 0.02;
 
-    this->Q(2,0) = 0.05;
-    this->Q(2,1) = 0.05;
+    this->Q(2,0) = 0.02;
+    this->Q(2,1) = 0.02;
 
-    this->Q(2,2) = 10.0;
+    this->Q(2,2) = 1.5;
 
     // obs model
     this->H(0,0) = 1;
@@ -102,10 +102,10 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
         map_features->push_back(point);
     }
 
-    //    pcl::VoxelGrid<point_type> voxel_grid;
-    //    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
-    //    voxel_grid.setInputCloud (map_features);
-    //    voxel_grid.filter (*map_features);
+    pcl::VoxelGrid<point_type> voxel_grid;
+    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
+    voxel_grid.setInputCloud (map_features);
+    voxel_grid.filter (*map_features);
 
     // Get Transform from laser to base frame
 
@@ -114,8 +114,8 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     {
         try
         {
-            listener->waitForTransform(base_link, laser_link, ros::Time(0), ros::Duration(0.05) );
-            listener->lookupTransform(base_link, laser_link, ros::Time(0), laserToBaseTf); // ABSOLUTE EGO TO WORLD
+            listener->waitForTransform(laser_link, base_link, ros::Time(0), ros::Duration(0.05) );
+            listener->lookupTransform(laser_link, base_link, ros::Time(0), laserToBaseTf); // ABSOLUTE EGO TO WORLD
         }
         catch(tf::TransformException& ex)
         {
@@ -161,34 +161,40 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         }
     }
 
-    tf::StampedTransform laserToMapTf;
-    try
-    {
-        listener->waitForTransform(map_link, laser_link, filter_stamp_old_, ros::Duration(0.05) );
-        listener->lookupTransform(map_link, laser_link, filter_stamp_old_, laserToMapTf);
-    }
-    catch(tf::TransformException& ex)
-    {
-        ROS_WARN("%s",ex.what());
-    }
-
-    //std::cout << "before predicting:"<< laserToMapTf.getOrigin().getX() << " "  <<laserToMapTf.getOrigin().getY() << " " << laserToMapTf.getRotation().getAngle() << std::endl;
-
     if(!predict())
     {
         std::cout << "ups"<< std::endl;
         return;
     }
 
-    //return;
-    // subtracting base to odom from map to base and send map to odom instead
+    tf::StampedTransform laserToBaseTf;
+    tf::StampedTransform mapToBaseTf;
+    try
+    {
+        listener->waitForTransform(base_link, laser_link, filter_stamp_, ros::Duration(0.01) );
+        listener->lookupTransform(base_link, laser_link, filter_stamp_, laserToBaseTf);
+        listener->waitForTransform(base_link, map_link, filter_stamp_, ros::Duration(0.01) );
+        listener->lookupTransform(base_link, map_link, filter_stamp_, mapToBaseTf);
+    }
+    catch(tf::TransformException& ex)
+    {
+        ROS_WARN("%s",ex.what());
+        return;
 
-    //const int size = (msg->angle_max - msg->angle_min) / msg->angle_increment;
+    }
+
+    Eigen::Matrix4f mapToBaseEigen;
+    Eigen::Matrix4f laserToBaseEigen;
+
+    pcl_ros::transformAsMatrix(laserToBaseTf, laserToBaseEigen);
+    pcl_ros::transformAsMatrix(mapToBaseTf, mapToBaseEigen);
+
+
+
     laser->resize(msg->ranges.size());
-    laser->header.frame_id=laser_link;
+    laser->header.frame_id=base_link;
     laser->is_dense=false;
     pcl_conversions::toPCL(filter_stamp_, laser->header.stamp);
-
     point_type point;//=point_type(0, 0, 255);
     double step=msg->angle_increment;
 
@@ -198,7 +204,7 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         point.x = msg->ranges[i]*cos(angle_);
         point.y = msg->ranges[i]*sin(angle_);
         point.z = 0.0;
-        point.intensity=1.0;
+        point.intensity=1.0/sqrt(point.x*point.x+point.y*point.y);
         (*laser)[i]=point;
     }
 
@@ -211,63 +217,42 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
     voxel_grid.setInputCloud (laser);
     voxel_grid.filter (*laser);
-    //std::cerr << "Cloud before filtering: " << std::endl;
-    //std::cerr << *laser << std::endl;
 
-    // Create the filtering object
-    //    pcl::StatisticalOutlierRemoval<point_type> sor;
-    //    sor.setInputCloud (laser);
-    //    sor.setMeanK (30);
-    //    sor.setStddevMulThresh (1.0);
-    //    sor.filter (*laser);
+    // Transform laser to base link
+    pcl::PointCloud<point_type>::Ptr laser_in_base_link (new pcl::PointCloud<point_type>());
+    pcl::transformPointCloud (*laser, *laser_in_base_link, laserToBaseEigen);
+    laser_in_base_link->is_dense=false;
+    laser_in_base_link->header.frame_id=base_link;
+    pcl_conversions::toPCL(filter_stamp_, laser_in_base_link->header.stamp);
 
-    //std::cerr << "Cloud after filtering: " << std::endl;
-    //std::cerr << *laser << std::endl;
-
-    // Transform to laser scan to map frame
-    try
-    {
-        listener->waitForTransform(map_link, laser_link, filter_stamp_, ros::Duration(0.05) );
-        listener->lookupTransform(map_link, laser_link, filter_stamp_, laserToMapTf);
-    }
-    catch(tf::TransformException& ex)
-    {
-        ROS_ERROR("HERE2");
-
-        ROS_WARN("%s",ex.what());
-
-        return;
-    }
-    //std::cout << "after predicting:"<< laserToMapTf.getOrigin().getX() << " "  <<laserToMapTf.getOrigin().getY() << " " << laserToMapTf.getRotation().getAngle() << std::endl;
-
-    pcl_ros::transformAsMatrix(laserToMapTf, laserToMapEigen);
-    pcl::PointCloud<point_type>::Ptr laser_map (new pcl::PointCloud<point_type>());
-    pcl::transformPointCloud (*laser, *laser_map, laserToMapEigen);
-    laser_map->is_dense=false;
-    laser_map->header.frame_id=map_link;
-    pcl_conversions::toPCL(filter_stamp_, laser_map->header.stamp);
+    // Transform map to base link
+    pcl::PointCloud<point_type>::Ptr map_in_base_link (new pcl::PointCloud<point_type>());
+    pcl::transformPointCloud (*map_features, *map_in_base_link, mapToBaseEigen);
+    map_in_base_link->is_dense=false;
+    map_in_base_link->header.frame_id=base_link;
+    pcl_conversions::toPCL(filter_stamp_, map_in_base_link->header.stamp);
 
     // Compute ICP
     pcl::IterativeClosestPoint<point_type, point_type> icp;
 
-    icp.setInputSource(laser_map);
-    icp.setInputTarget(map_features);
+    icp.setInputSource(laser_in_base_link);
+    icp.setInputTarget(map_in_base_link);
     icp.setTransformationEpsilon (1e-8);
-    icp.setMaxCorrespondenceDistance(10); //10
-    icp.setMaximumIterations(200); //200
-    icp.setRANSACIterations (200);
+    icp.setMaxCorrespondenceDistance(0.1); //10
+    icp.setMaximumIterations(200000); //200
+    icp.setRANSACIterations (200000);
 
     pcl::PointCloud<point_type> Final;
     icp.align(Final);
 
-    Final.header.frame_id=map_link;
-    double scale=1.0;
-    //std::cout << "conv:"<< icp.getFitnessScore()<< std::endl;
+    Final.header.frame_id=base_link;
+    double scale=10.0;
+    std::cout << "conv:"<< icp.getFitnessScore()<< std::endl;
     R(0,0)=scale*icp.getFitnessScore();
     R(1,1)=scale*icp.getFitnessScore();
     R(2,2)=scale*icp.getFitnessScore();
     Eigen::Matrix4f correction_transform_map_frame=icp.getFinalTransformation();
-    Eigen::Matrix4f correction_transform_=correction_transform_map_frame;
+    Eigen::Matrix4f correction_transform_=(correction_transform_map_frame).inverse();
 
     //std::cout << correction_transform_ << std::endl;
     cv::Vec3d res;
@@ -275,11 +260,12 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     res[0]=correction_transform_(0,3);
     res[1]=correction_transform_(1,3);
     res[2]=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2);
+    std::cout << "angle:"<<correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2)<< std::endl;
     angleOverflowCorrect(res[2]);
 
     correct(res);
 
-
+    std::cout << res << std::endl;
     if(icp.hasConverged())
     {
         broadcast();
@@ -289,9 +275,8 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         ROS_ERROR("DIDN_TE CONVERFGE");
     }
 
-    pcl::transformPointCloud (*laser_map, *laser_map, correction_transform_);
-
-    local_features_pub.publish(laser_map);
+    pcl::transformPointCloud (*laser_in_base_link, *laser_in_base_link, correction_transform_);
+    local_features_pub.publish(Final);
     return;
 }
 
@@ -306,8 +291,8 @@ bool kalman::predict()
     // Get delta motion in cartesian coordinates with TF
     try
     {
-        listener->waitForTransform(base_link, filter_stamp_old_, base_link, filter_stamp_ , odom_link, ros::Duration(0.05) );
-        listener->lookupTransform(base_link, filter_stamp_old_, base_link, filter_stamp_, odom_link, baseDeltaTf); // Velocity
+        listener->waitForTransform(base_link, filter_stamp_, base_link, filter_stamp_old_ , odom_link, ros::Duration(0.01) );
+        listener->lookupTransform(base_link, filter_stamp_, base_link, filter_stamp_old_, odom_link, baseDeltaTf); // Velocity
 
         listener->waitForTransform(base_link, odom_link, filter_stamp_ , ros::Duration(0.05) );
         listener->lookupTransform(base_link, odom_link, filter_stamp_, odomTf); // Velocity
@@ -319,68 +304,46 @@ bool kalman::predict()
     }
 
     double dt=filter_stamp_.toSec()-filter_stamp_old_.toSec();
-    if(dt<0.02) // Problems at initialization
-    {
-    }
 
 
-    //    double delta_yaw=baseDeltaTf.getRotation().getAngle();
-    //    double delta_x=sqrt(baseDeltaTf.getOrigin().getX()*baseDeltaTf.getOrigin().getX() +baseDeltaTf.getOrigin().getY()*baseDeltaTf.getOrigin().getY());
 
-    //    double v_yaw=-delta_yaw/dt;
-    //    double v_x=delta_x/dt;
-    //    //std::cout << "delta_x:"<< delta_x << std::endl;
-    //    //std::cout << "delta_yaw:"<< delta_yaw << std::endl;
-    //    //std::cout << "v_x:"<< v_x << std::endl;
-    //    //std::cout << "v_yaw:"<< v_yaw << std::endl;
-    //    nav_msgs::Odometry odom_msg;
-    //    odom_msg.twist.twist.angular.z=v_yaw;
-    //    odom_msg.twist.twist.linear.x=v_x;
-
-
-    //this->linear = msg->twist.twist.linear.x;
-    //this->angular = msg->twist.twist.angular.z;
+    //    this->linear = msg->twist.twist.linear.x;
+    //    this->angular = msg->twist.twist.angular.z;
     //    this->linear = odom_msg.twist.twist.linear.x;
     //    this->angular = odom_msg.twist.twist.angular.z;
+    double linear_=sqrt(baseDeltaTf.getOrigin().getX()*baseDeltaTf.getOrigin().getX()+baseDeltaTf.getOrigin().getY()*baseDeltaTf.getOrigin().getY());
+    this->X[0] += linear_ * cos( X[2] );
+    this->X[1] += linear_ * sin( X[2] );
+    this->X[2] += baseDeltaTf.getRotation().getAxis()[2]*baseDeltaTf.getRotation().getAngle();
 
-    //    this->X[0] += linear * dt * cos( X[2] );
-    //    this->X[1] += linear * dt * sin( X[2] );
-    //    this->X[2] += angular * dt;
+    //    double delta_x=baseDeltaTf.getOrigin().getX();
+    //    double delta_y=baseDeltaTf.getOrigin().getY();
+    //    double delta_theta=baseDeltaTf.getRotation().getAngle();
+    //    angleOverflowCorrect(delta_theta);
+    //    this->X[0] += delta_x;
+    //    this->X[1] += delta_y;
+    //    this->X[2] += baseDeltaTf.getRotation().getAxis()[2]*delta_theta;
+    //    angleOverflowCorrect(this->X_acum[2]);
 
-    double delta_x=baseDeltaTf.getOrigin().getX();
-    double delta_y=baseDeltaTf.getOrigin().getY();
-    double delta_theta=baseDeltaTf.getRotation().getAngle();
-    angleOverflowCorrect(delta_theta);
-    this->X[0] += delta_x;
-    this->X[1] += delta_y;
-    this->X[2] += delta_theta;
-    angleOverflowCorrect(this->X_acum[2]);
-
-//    this->X[0] = odomTf.getOrigin().getX();
-//    this->X[1] = odomTf.getOrigin().getY();
-//    this->X[2] = odomTf.getRotation().getAngle();
+    //    this->X[0] = odomTf.getOrigin().getX();
+    //    this->X[1] = odomTf.getOrigin().getY();
+    //    this->X[2] = odomTf.getRotation().getAngle();
     angleOverflowCorrect(this->X[2]);
 
-    std::cout << "X:" << X.t() << std::endl;
-    std::cout << "X acum:" << X_acum.t() << std::endl << std::endl;
+    //    std::cout << "X:" << X[2] << std::endl;
+    //    std::cout << "X acum:" << X_acum[2] << std::endl ;
 
-
+    //    std::cout << "delta_theta:" << delta_theta<< std::endl;
+    //    std::cout << "direction: "<< baseDeltaTf.getRotation().getAxis()[0] <<  " " << baseDeltaTf.getRotation().getAxis()[1] << " " <<baseDeltaTf.getRotation().getAxis()[2] <<std::endl<< std::endl;
 
     //std::cout << "X" << cv::Point3d(X) << std::endl;
 
-    //this->F(0,2) = -linear * dt * sin( X[2] ); //t+1 ?
-    //this->F(1,2) =  linear * dt * cos( X[2] ); //t+1 ?
+    this->F(0,2) = -linear_ *  sin( X[2] ); //t+1 ?
+    this->F(1,2) =  linear_ *  cos( X[2] ); //t+1 ?
 
     P = F * P * F.t() + Q;
     P = (P + P.t()) * 0.5;
 
-
-
-    // Send prediction to TF
-    tf::Transform transform(tf::createQuaternionFromYaw(this->X[2]),
-            tf::Vector3(this->X[0],
-            this->X[1],
-            0.0));
 
     broadcast();
 
