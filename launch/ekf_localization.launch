@@ -10,7 +10,7 @@
   <node name="odom_node" pkg="ekf_localization" type="odom_node" output="screen"/>
   <node name="ekf_localization_node" pkg="ekf_localization" type="ekf_localization_test" output="screen" args="$(arg map_file).pgm"/>
   <node name="map_server" pkg="map_server" type="map_server"  args="$(arg map_file).yaml" />
-  <node pkg="rosbag" type="play" name="player" output="screen" args="--clock $(find advanced_robotics)/$(arg rosbag_file_1)"/>
+  <node pkg="rosbag" type="play" name="player" output="log" args="--clock $(find advanced_robotics)/$(arg rosbag_file_1)" />
   <node pkg="tf" type="static_transform_publisher" name="base_to_laser_frame" args="0.15 0 0 0 0 0  /base_link /laser_frame 50" />
 
 </launch>

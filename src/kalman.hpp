@@ -67,6 +67,8 @@ class kalman
     ros::Time laser_time;
 
     cv::Vec3d X;           //!< predicted state (x'(k)): x(k)=A*x(k-1)+B*u(k)
+    cv::Vec3d X_acum;           //!< predicted state (x'(k)): x(k)=A*x(k-1)+B*u(k)
+
     cv::Matx<double,3,3> F;   				//!< state transition matrix (F)
     cv::Matx<double,3,3> I;   				//!< state transition matrix (F)
     cv::Matx<double,3,3> H;  				//!< measurement matrix (H)
@@ -79,6 +81,8 @@ class kalman
     pcl::PointCloud<point_type>::Ptr map_features_aux;
 
     double voxel_grid_size;
+
+    void sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_);
 public:
 
     void publishFeatures()
@@ -107,7 +111,7 @@ public:
 
 
     bool predict();
-    void correct(const cv::Vec3d & obs);
+    void correct(const cv::Vec3d & res);
 
     enum {OCCUPIED = 0, FREE = 255};
     const static int CV_TYPE = CV_64F;
