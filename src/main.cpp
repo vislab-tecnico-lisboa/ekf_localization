@@ -19,7 +19,7 @@ int main(int argc, char *argv[])
     //const cv::Mat map = cv::imread(argv[1], CV_LOAD_IMAGE_ANYCOLOR);
     const cv::Mat map = cv::imread(argv[1]);
     std::cout << argv[1]<< std::endl;
-    const int spin_rate = 50;
+    const int spin_rate = 10;
 
     cv::namedWindow(name);
     double init_x, init_y, init_theta;
@@ -33,23 +33,7 @@ int main(int argc, char *argv[])
     while(ros::ok())
     {
         ros::spinOnce();
-        cv::Vec3d X= k.getX();
-        cv::Matx<double,3,3> Q=k.getP();
-        Eigen::Vector2f mean;
-        mean[0]=X[0];
-        mean[1]=X[1];
-
-        Eigen::Matrix2f covMatrix;
-        covMatrix(0,0)=Q(0,0);
-        covMatrix(0,1)=Q(0,1);
-
-        covMatrix(1,0)=Q(1,0);
-        covMatrix(1,1)=Q(1,1);
-        k.drawCovariance(mean,covMatrix);
-        k.publishFeatures();
-        //k.correct();
-        //k.show_map(name,true);
-        k.broadcast();
+        k.spin();
         rate.sleep();
     }
     ros::shutdown();

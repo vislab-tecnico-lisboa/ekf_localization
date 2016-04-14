@@ -38,8 +38,6 @@ int main(int argc, char** argv)
 
             listener.waitForTransform(base_link, odom_link, ros::Time(0), ros::Duration(0.1) );
             listener.lookupTransform(base_link, odom_link, ros::Time(0), odomTf); // Position
-
-
         }
         catch (tf::TransformException &ex)
         {
@@ -57,6 +55,7 @@ int main(int argc, char** argv)
         double v_x=delta_x/dt;
 
         nav_msgs::Odometry odom_msg;
+        odom_msg.header.stamp=ros::Time::now();
         odom_msg.pose.pose.position.x=odomTf.getOrigin().getX();
         odom_msg.pose.pose.position.y=odomTf.getOrigin().getY();
         odom_msg.pose.pose.position.z=odomTf.getOrigin().getZ();

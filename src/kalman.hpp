@@ -27,6 +27,8 @@
 #include <pcl/registration/icp.h>
 #include <pcl/registration/icp_nl.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+
 struct rangle
 {
     double range, angle;
@@ -35,6 +37,9 @@ struct rangle
 
 class kalman
 {
+    tf::Transformer transformer_;
+    ros::Time odom_stamp_, laser_stamp_, filter_stamp_,odom_init_stamp_,laser_init_stamp_,filter_stamp_old_;
+    bool odom_active_, laser_active_,odom_initializing_,laser_initializing_;
     typedef pcl::PointXYZI point_type;
     boost::shared_ptr<tf::TransformListener> listener;
 
@@ -47,7 +52,6 @@ class kalman
     std::string map_link;
     std::string laser_link;
     cv::Mat map;
-    double dt;
     double gt_x, gt_y, gt_theta;
     double linear, angular;
     ros::Subscriber cmd_sub;
@@ -102,12 +106,8 @@ public:
     void laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg);
 
 
-    void predict(const nav_msgs::Odometry msg);
+    bool predict();
     void correct(const cv::Vec3d & obs);
-
-    cv::Point2i toImage(cv::Point2d p) const;
-
-    //cv::Mat show_map(const std::string& win_name, bool draw) const;
 
     enum {OCCUPIED = 0, FREE = 255};
     const static int CV_TYPE = CV_64F;
@@ -116,6 +116,39 @@ public:
     {
         while ((a) >  M_PI) a -= 2*M_PI;
         while ((a) < -M_PI) a += 2*M_PI;
+    }
+
+    void spin()
+    {
+        broadcast();
+
+        cv::Vec3d X= getX();
+        cv::Matx<double,3,3> Q=getP();
+        Eigen::Vector2f mean;
+        mean[0]=X[0];
+        mean[1]=X[1];
+
+        Eigen::Matrix2f covMatrix;
+        covMatrix(0,0)=Q(0,0);
+        covMatrix(0,1)=Q(0,1);
+
+        covMatrix(1,0)=Q(1,0);
+        covMatrix(1,1)=Q(1,1);
+        drawCovariance(mean,covMatrix);
+        publishFeatures();
+
+
+        //        if ( (odom_initializing_ || odom_active_) && (laser_initializing_ || laser_active_) )
+        //        {
+        //            double diff = fabs( ros::Duration(odom_stamp_ - laser_stamp_).toSec() );
+        //            if (diff > 0.1)
+        //            {
+        //                ROS_ERROR("Timestamps of odometry and laser are %f seconds apart.", diff);
+        //            }
+        //        }
+
+
+
     }
 };
 
