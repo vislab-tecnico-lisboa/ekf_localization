@@ -277,7 +277,7 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     icp.align(Final);
 
     Final.header.frame_id=map_link;
-    //std::cout << "conv:"<< icp.getFitnessScore(max_correspondence_distance)<< std::endl;
+
     R(0,0)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
     R(1,1)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
     R(2,2)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
