@@ -322,8 +322,8 @@ bool kalman::predict()
     this->X[0] += cos(this->X[2]+delta_rot1)*delta_trans;
     this->X[1] += sin(this->X[2]+delta_rot1)*delta_trans;
     this->X[2] += delta_rot1+delta_rot2;
-
     angleOverflowCorrect(this->X[2]);
+    std::cout << delta_trans << std::endl;
 
     double sigma_rot1=alpha_1*fabs(delta_rot1)+alpha_2*delta_trans;
     double sigma_trans=alpha_3*delta_trans+alpha_4*(fabs(delta_rot1+delta_rot2));
@@ -336,7 +336,7 @@ bool kalman::predict()
     cv::Matx<double,3,3> J;
     J(0,0)=-sin(delta_rot1);
     J(1,0)=cos(delta_rot1);
-    std::cout << J << std::endl;
+    //std::cout << J << std::endl;
 
 
     P += J*Sigma*J.t();
@@ -347,8 +347,6 @@ bool kalman::predict()
 
     filter_stamp_old_=filter_stamp_;
     return true;
-
-
 }
 
 void kalman::correct(const cv::Vec3d & res)
