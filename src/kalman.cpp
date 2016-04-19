@@ -15,15 +15,34 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
       odom_initializing_(false),
       laser_initializing_(false)
 {
+
+    nh_priv.param<std::string>("base_link",base_link, "base_link");
+    nh_priv.param<std::string>("odom_link",odom_link, "odom");
+
     nh_priv.param("alpha_1",alpha_1, 0.05);
     nh_priv.param("alpha_2",alpha_2, 0.001);
     nh_priv.param("alpha_3",alpha_3, 5.0);
     nh_priv.param("alpha_4",alpha_4, 0.05);
-    nh_priv.param("sigma_xy",sigma_xy, 0.01);
-    nh_priv.param("sigma_theta",sigma_theta, 0.2);
+    nh_priv.param("max_correspondence_distance",max_correspondence_distance, 100.0);
+    nh_priv.param("max_iterations",max_iterations, 1000);
+    nh_priv.param("ransac_iterations",ransac_iterations, 1000);
+    nh_priv.param("ransac_outlier_threshold",ransac_outlier_threshold, 0.1);
+    nh_priv.param("icp_optimization_epsilon",icp_optimization_epsilon, 0.0000001);
+    nh_priv.param("icp_score_scale",icp_score_scale, 100.0);
 
-    nh_priv.param<std::string>("base_link",base_link, "base_link");
-    nh_priv.param<std::string>("odom_link",odom_link, "odom");
+    ROS_INFO_STREAM("alpha_1:"<<alpha_1);
+    ROS_INFO_STREAM("alpha_2:"<<alpha_2);
+    ROS_INFO_STREAM("alpha_3:"<<alpha_3);
+    ROS_INFO_STREAM("alpha_4:"<<alpha_4);
+    ROS_INFO_STREAM("max_correspondence_distance:"<<max_correspondence_distance);
+    ROS_INFO_STREAM("max_iterations:"<<max_iterations);
+    ROS_INFO_STREAM("ransac_iterations:"<<ransac_iterations);
+    ROS_INFO_STREAM("ransac_outlier_threshold:"<<ransac_outlier_threshold);
+    ROS_INFO_STREAM("icp_optimization_epsilon:"<<icp_optimization_epsilon);
+    ROS_INFO_STREAM("icp_score_scale:"<<icp_score_scale);
+
+    alpha_2=alpha_2*180/M_PI; // Convert to radian
+    alpha_3=alpha_3*M_PI/180; // Convert to radians
 
     //this->cmd_sub = nh.subscribe("odom", 1, &kalman::odometry_callback, this);
     this->laser_sub = nh.subscribe("scan", 1, &kalman::laser_callback, this);
@@ -178,15 +197,15 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         std::cout << "ups"<< std::endl;
         return;
     }
-    return;
+
     tf::StampedTransform laserToBaseTf;
     tf::StampedTransform mapToBaseTf;
     try
     {
-        listener->waitForTransform(base_link, laser_link, filter_stamp_, ros::Duration(0.01) );
-        listener->lookupTransform(base_link, laser_link, filter_stamp_, laserToBaseTf);
-        listener->waitForTransform(base_link, map_link, filter_stamp_, ros::Duration(0.01) );
-        listener->lookupTransform(base_link, map_link, filter_stamp_, mapToBaseTf);
+        listener->waitForTransform(map_link, laser_link, filter_stamp_, ros::Duration(0.01) );
+        listener->lookupTransform(map_link, laser_link, filter_stamp_, laserToBaseTf);
+        listener->waitForTransform(map_link, map_link, filter_stamp_, ros::Duration(0.01) );
+        listener->lookupTransform(map_link, map_link, filter_stamp_, mapToBaseTf);
     }
     catch(tf::TransformException& ex)
     {
@@ -234,7 +253,7 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     pcl::PointCloud<point_type>::Ptr laser_in_base_link (new pcl::PointCloud<point_type>());
     pcl::transformPointCloud (*laser, *laser_in_base_link, laserToBaseEigen);
     laser_in_base_link->is_dense=false;
-    laser_in_base_link->header.frame_id=base_link;
+    laser_in_base_link->header.frame_id=map_link;
     pcl_conversions::toPCL(filter_stamp_, laser_in_base_link->header.stamp);
 
     // Transform map to base link
@@ -246,38 +265,36 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 
     // Compute ICP
     pcl::IterativeClosestPoint<point_type, point_type> icp;
-
     icp.setInputSource(laser_in_base_link);
     icp.setInputTarget(map_in_base_link);
-    icp.setTransformationEpsilon (1e-8);
-    icp.setMaxCorrespondenceDistance(5.0); //10
-    icp.setMaximumIterations(100); //200
-    icp.setRANSACIterations (100000);
-    icp.setRANSACOutlierRejectionThreshold(0.1);
+    icp.setTransformationEpsilon (icp_optimization_epsilon);
+    icp.setMaxCorrespondenceDistance(max_correspondence_distance); //10
+
+    icp.setMaximumIterations(max_iterations); //200
+    icp.setRANSACIterations (ransac_iterations);
+    icp.setRANSACOutlierRejectionThreshold(ransac_outlier_threshold);
     pcl::PointCloud<point_type> Final;
     icp.align(Final);
 
-    Final.header.frame_id=base_link;
-    double scale=100.0;
-    std::cout << "conv:"<< icp.getFitnessScore()<< std::endl;
-    R(0,0)=scale*icp.getFitnessScore();
-    R(1,1)=scale*icp.getFitnessScore();
-    R(2,2)=scale*icp.getFitnessScore();
-    Eigen::Matrix4f correction_transform_map_frame=icp.getFinalTransformation();
-    Eigen::Matrix4f correction_transform_=(correction_transform_map_frame).inverse();
+    Final.header.frame_id=map_link;
+    //std::cout << "conv:"<< icp.getFitnessScore(max_correspondence_distance)<< std::endl;
+    R(0,0)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
+    R(1,1)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
+    R(2,2)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
+    //Eigen::Matrix4f correction_transform_map_frame=icp.getFinalTransformation();
+    Eigen::Matrix4f correction_transform_=icp.getFinalTransformation();
 
-    //std::cout << correction_transform_ << std::endl;
     cv::Vec3d res;
 
     res[0]=correction_transform_(0,3);
     res[1]=correction_transform_(1,3);
     res[2]=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2);
-    std::cout << "angle:"<<correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2)<< std::endl;
+
     angleOverflowCorrect(res[2]);
 
     correct(res);
 
-    std::cout << res << std::endl;
+    //std::cout << res << std::endl;
     if(icp.hasConverged())
     {
         broadcast();
@@ -287,7 +304,7 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         ROS_ERROR("DIDN_TE CONVERFGE");
     }
 
-    pcl::transformPointCloud (*laser_in_base_link, *laser_in_base_link, correction_transform_);
+    //pcl::transformPointCloud (*laser_in_base_link, *laser_in_base_link, correction_transform_);
     local_features_pub.publish(Final);
     return;
 }
@@ -301,8 +318,8 @@ bool kalman::predict()
     // Get delta motion in cartesian coordinates with TF
     try
     {
-        listener->waitForTransform(base_link, filter_stamp_, base_link, filter_stamp_old_ , odom_link, ros::Duration(0.01) );
-        listener->lookupTransform(base_link, filter_stamp_, base_link, filter_stamp_old_, odom_link, baseDeltaTf); // Velocity
+        listener->waitForTransform(base_link, filter_stamp_old_, base_link, filter_stamp_ , odom_link, ros::Duration(0.01) );
+        listener->lookupTransform(base_link, filter_stamp_old_, base_link, filter_stamp_, odom_link, baseDeltaTf); // delta position
 
     }
     catch (tf::TransformException &ex)
@@ -315,15 +332,19 @@ bool kalman::predict()
     double dy=baseDeltaTf.getOrigin().getY();
     double d_theta=baseDeltaTf.getRotation().getAxis()[2]*baseDeltaTf.getRotation().getAngle();
 
-    double delta_rot1=atan2(dy,dx)-this->X[2];
+    //std::cout << "dy:"<< dy << " dx:" << dx << " dtheta:" <<d_theta<<  std::endl;
+
+    double delta_rot1=atan2(dy,dx);
     double delta_trans=sqrt(dx*dx+dy*dy);
     double delta_rot2=d_theta-delta_rot1;
 
     this->X[0] += cos(this->X[2]+delta_rot1)*delta_trans;
     this->X[1] += sin(this->X[2]+delta_rot1)*delta_trans;
-    this->X[2] += delta_rot1+delta_rot2;
+    this->X[2] += d_theta;
+
+
     angleOverflowCorrect(this->X[2]);
-    std::cout << delta_trans << std::endl;
+    //std::cout << delta_trans << std::endl;
 
     double sigma_rot1=alpha_1*fabs(delta_rot1)+alpha_2*delta_trans;
     double sigma_trans=alpha_3*delta_trans+alpha_4*(fabs(delta_rot1+delta_rot2));
@@ -334,8 +355,11 @@ bool kalman::predict()
     Sigma(2,2)=sigma_rot2;
 
     cv::Matx<double,3,3> J;
-    J(0,0)=-sin(delta_rot1);
-    J(1,0)=cos(delta_rot1);
+    J(0,0)=-sin(delta_rot1); J(0,1)=cos(delta_rot1); J(0,2)=0;
+    J(1,0)=cos(delta_rot1);  J(1,1)=sin(delta_rot1);  J(1,2)=0;
+    J(2,0)=1;  J(2,1)=0;  J(2,2)=1;
+
+
     //std::cout << J << std::endl;
 
 
@@ -382,7 +406,7 @@ void kalman::broadcast()
                 tf::Vector3(this->X[0],
                 this->X[1],
                 0.0));
-        tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf,
+        tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
                                               filter_stamp_,
                                               base_link); // base to map
         this->listener->transformPose(odom_link,
@@ -401,10 +425,9 @@ void kalman::broadcast()
     // We want to send a transform that is good up until a
     // tolerance time so that odom can be used
     tf::StampedTransform tmp_tf_stamped(latest_tf_.inverse(),
-                                        filter_stamp_,//+ros::Duration(0.1)
+                                        filter_stamp_+ros::Duration(0.1),
                                         map_link, odom_link);
     tf_broadcaster.sendTransform(tmp_tf_stamped);
-
 }
 
 

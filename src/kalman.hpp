@@ -80,8 +80,16 @@ class kalman
     cv::Matx<double,3,3> R;
     pcl::PointCloud<point_type>::Ptr map_features;
     pcl::PointCloud<point_type>::Ptr map_features_aux;
-    double alpha_1, alpha_2, alpha_3, alpha_4, sigma_xy, sigma_theta;
+    double alpha_1, alpha_2, alpha_3, alpha_4;
     double voxel_grid_size;
+
+    // ICP params
+    double max_correspondence_distance;
+    int max_iterations;
+    int ransac_iterations;
+    double ransac_outlier_threshold;
+    double icp_optimization_epsilon;
+    double icp_score_scale;
 
     void sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_);
 public:
