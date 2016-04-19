@@ -1,0 +1,6 @@
+alpha_1: 0.05  # meters/meter
+alpha_2: 0.001 # meters/degree
+alpha_3: 5.0   # degrees/meter
+alpha_4: 0.05  # degrees/degree
+sigma_xy: 0.00 # meters
+sigma_theta: 0.0  # degrees

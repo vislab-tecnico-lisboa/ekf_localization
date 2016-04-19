@@ -37,6 +37,7 @@ struct rangle
 
 class kalman
 {
+    ros::NodeHandle nh_priv;
     tf::Transformer transformer_;
     ros::Time odom_stamp_, laser_stamp_, filter_stamp_,odom_init_stamp_,laser_init_stamp_,filter_stamp_old_;
     bool odom_active_, laser_active_,odom_initializing_,laser_initializing_;
@@ -79,7 +80,7 @@ class kalman
     cv::Matx<double,3,3> R;
     pcl::PointCloud<point_type>::Ptr map_features;
     pcl::PointCloud<point_type>::Ptr map_features_aux;
-
+    double alpha_1, alpha_2, alpha_3, alpha_4, sigma_xy, sigma_theta;
     double voxel_grid_size;
 
     void sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_);

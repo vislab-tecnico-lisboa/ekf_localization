@@ -1,7 +1,8 @@
 #include "kalman.hpp"
 
 kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_)
-    : map(pmap.clone()),
+    : nh_priv("~"),
+      map(pmap.clone()),
       linear(0),
       angular(0),
       listener(new tf::TransformListener(ros::Duration(10.0))),
@@ -14,6 +15,15 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
       odom_initializing_(false),
       laser_initializing_(false)
 {
+    nh_priv.param("alpha_1",alpha_1, 0.05);
+    nh_priv.param("alpha_2",alpha_2, 0.001);
+    nh_priv.param("alpha_3",alpha_3, 5.0);
+    nh_priv.param("alpha_4",alpha_4, 0.05);
+    nh_priv.param("sigma_xy",sigma_xy, 0.01);
+    nh_priv.param("sigma_theta",sigma_theta, 0.2);
+
+    nh_priv.param<std::string>("base_link",base_link, "base_link");
+    nh_priv.param<std::string>("odom_link",odom_link, "odom");
 
     //this->cmd_sub = nh.subscribe("odom", 1, &kalman::odometry_callback, this);
     this->laser_sub = nh.subscribe("scan", 1, &kalman::laser_callback, this);
@@ -31,6 +41,9 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     this->X[1] = y_init;
     this->X[2] = theta_init;
 
+    this->P(0,0) = 0.1;
+    this->P(1,1) = 0.1;
+    this->P(2,2) = 0.1;
 
     this->X_acum[0] = x_init;
     this->X_acum[1] = y_init;
@@ -44,29 +57,28 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     this->I(1,1) = 1;
     this->I(2,2) = 1;
 
-    this->P(0,0) = 1;
-    this->P(1,1) = 1;
-    this->P(2,2) = 1;
+
 
     // odometry cov
-    this->Q(0,0) = 0.01;
-    this->Q(1,1) = 0.01;
+    this->Q(0,0) = 0.001;
+    this->Q(1,1) = 0.001;
 
     //this->Q(0,1) = 0.00001;
     //this->Q(1,0) = 0.00001;
 
-    this->Q(0,2) = 0.02;
-    this->Q(1,2) = 0.02;
+    this->Q(0,2) = 0.0002;
+    this->Q(1,2) = 0.0002;
 
-    this->Q(2,0) = 0.02;
-    this->Q(2,1) = 0.02;
+    this->Q(2,0) = 0.0002;
+    this->Q(2,1) = 0.0002;
 
-    this->Q(2,2) = 1.5;
+    this->Q(2,2) = 0.005;
 
     // obs model
     this->H(0,0) = 1;
     this->H(1,1) = 1;
     this->H(2,2) = 1;
+
     // laser cov
     this->R(0,0) = 0.1;
     this->R(1,1) = 0.1;
@@ -166,7 +178,7 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         std::cout << "ups"<< std::endl;
         return;
     }
-
+    return;
     tf::StampedTransform laserToBaseTf;
     tf::StampedTransform mapToBaseTf;
     try
@@ -238,15 +250,15 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     icp.setInputSource(laser_in_base_link);
     icp.setInputTarget(map_in_base_link);
     icp.setTransformationEpsilon (1e-8);
-    icp.setMaxCorrespondenceDistance(0.1); //10
-    icp.setMaximumIterations(200000); //200
-    icp.setRANSACIterations (200000);
-
+    icp.setMaxCorrespondenceDistance(5.0); //10
+    icp.setMaximumIterations(100); //200
+    icp.setRANSACIterations (100000);
+    icp.setRANSACOutlierRejectionThreshold(0.1);
     pcl::PointCloud<point_type> Final;
     icp.align(Final);
 
     Final.header.frame_id=base_link;
-    double scale=10.0;
+    double scale=100.0;
     std::cout << "conv:"<< icp.getFitnessScore()<< std::endl;
     R(0,0)=scale*icp.getFitnessScore();
     R(1,1)=scale*icp.getFitnessScore();
@@ -286,16 +298,12 @@ bool kalman::predict()
 
     tf::StampedTransform baseDeltaTf;
 
-    tf::StampedTransform odomTf;
-
     // Get delta motion in cartesian coordinates with TF
     try
     {
         listener->waitForTransform(base_link, filter_stamp_, base_link, filter_stamp_old_ , odom_link, ros::Duration(0.01) );
         listener->lookupTransform(base_link, filter_stamp_, base_link, filter_stamp_old_, odom_link, baseDeltaTf); // Velocity
 
-        listener->waitForTransform(base_link, odom_link, filter_stamp_ , ros::Duration(0.05) );
-        listener->lookupTransform(base_link, odom_link, filter_stamp_, odomTf); // Velocity
     }
     catch (tf::TransformException &ex)
     {
@@ -303,45 +311,35 @@ bool kalman::predict()
         return false;
     }
 
-    double dt=filter_stamp_.toSec()-filter_stamp_old_.toSec();
+    double dx=baseDeltaTf.getOrigin().getX();
+    double dy=baseDeltaTf.getOrigin().getY();
+    double d_theta=baseDeltaTf.getRotation().getAxis()[2]*baseDeltaTf.getRotation().getAngle();
 
+    double delta_rot1=atan2(dy,dx)-this->X[2];
+    double delta_trans=sqrt(dx*dx+dy*dy);
+    double delta_rot2=d_theta-delta_rot1;
 
+    this->X[0] += cos(this->X[2]+delta_rot1)*delta_trans;
+    this->X[1] += sin(this->X[2]+delta_rot1)*delta_trans;
+    this->X[2] += delta_rot1+delta_rot2;
 
-    //    this->linear = msg->twist.twist.linear.x;
-    //    this->angular = msg->twist.twist.angular.z;
-    //    this->linear = odom_msg.twist.twist.linear.x;
-    //    this->angular = odom_msg.twist.twist.angular.z;
-    double linear_=sqrt(baseDeltaTf.getOrigin().getX()*baseDeltaTf.getOrigin().getX()+baseDeltaTf.getOrigin().getY()*baseDeltaTf.getOrigin().getY());
-    this->X[0] += linear_ * cos( X[2] );
-    this->X[1] += linear_ * sin( X[2] );
-    this->X[2] += baseDeltaTf.getRotation().getAxis()[2]*baseDeltaTf.getRotation().getAngle();
-
-    //    double delta_x=baseDeltaTf.getOrigin().getX();
-    //    double delta_y=baseDeltaTf.getOrigin().getY();
-    //    double delta_theta=baseDeltaTf.getRotation().getAngle();
-    //    angleOverflowCorrect(delta_theta);
-    //    this->X[0] += delta_x;
-    //    this->X[1] += delta_y;
-    //    this->X[2] += baseDeltaTf.getRotation().getAxis()[2]*delta_theta;
-    //    angleOverflowCorrect(this->X_acum[2]);
-
-    //    this->X[0] = odomTf.getOrigin().getX();
-    //    this->X[1] = odomTf.getOrigin().getY();
-    //    this->X[2] = odomTf.getRotation().getAngle();
     angleOverflowCorrect(this->X[2]);
 
-    //    std::cout << "X:" << X[2] << std::endl;
-    //    std::cout << "X acum:" << X_acum[2] << std::endl ;
+    double sigma_rot1=alpha_1*fabs(delta_rot1)+alpha_2*delta_trans;
+    double sigma_trans=alpha_3*delta_trans+alpha_4*(fabs(delta_rot1+delta_rot2));
+    double sigma_rot2=alpha_1*fabs(delta_rot2)+alpha_2*delta_trans;
+    cv::Matx<double,3,3> Sigma;
+    Sigma(0,0)=sigma_trans;
+    Sigma(1,1)=sigma_rot1;
+    Sigma(2,2)=sigma_rot2;
 
-    //    std::cout << "delta_theta:" << delta_theta<< std::endl;
-    //    std::cout << "direction: "<< baseDeltaTf.getRotation().getAxis()[0] <<  " " << baseDeltaTf.getRotation().getAxis()[1] << " " <<baseDeltaTf.getRotation().getAxis()[2] <<std::endl<< std::endl;
+    cv::Matx<double,3,3> J;
+    J(0,0)=-sin(delta_rot1);
+    J(1,0)=cos(delta_rot1);
+    std::cout << J << std::endl;
 
-    //std::cout << "X" << cv::Point3d(X) << std::endl;
 
-    this->F(0,2) = -linear_ *  sin( X[2] ); //t+1 ?
-    this->F(1,2) =  linear_ *  cos( X[2] ); //t+1 ?
-
-    P = F * P * F.t() + Q;
+    P += J*Sigma*J.t();
     P = (P + P.t()) * 0.5;
 
 
