@@ -1,3 +1,5 @@
+// BY Rui Pimentel de Figueiredo
+
 #include <vector>
 #include <opencv2/opencv.hpp>
 #include <boost/random.hpp>
