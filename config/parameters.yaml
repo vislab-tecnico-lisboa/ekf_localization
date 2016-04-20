@@ -1,7 +1,7 @@
-alpha_1: 0.01  # meters/meter
+alpha_1: 0.001  # meters/meter
 alpha_2: 0.001 # meters/degree
-alpha_3: 3.0   # degrees/meter
-alpha_4: 0.03  # degrees/degree
+alpha_3: 1.0   # degrees/meter
+alpha_4: 0.001  # degrees/degree
 
 # ICP PARAMETERS
 max_correspondence_distance: 200.0 

@@ -346,13 +346,13 @@ bool kalman::predict()
     angleOverflowCorrect(this->X[2]);
     //std::cout << delta_trans << std::endl;
 
-    double sigma_rot1=alpha_1*fabs(delta_rot1)+alpha_2*delta_trans;
-    double sigma_trans=alpha_3*delta_trans+alpha_4*(fabs(delta_rot1+delta_rot2));
-    double sigma_rot2=alpha_1*fabs(delta_rot2)+alpha_2*delta_trans;
+    double var_rot1=alpha_1*delta_rot1*delta_rot1+alpha_2*delta_trans*delta_trans;
+    double var_trans=alpha_3*delta_trans*delta_trans+alpha_4*(delta_rot1*delta_rot1+delta_rot2*delta_rot2);
+    double var_rot2=alpha_1*delta_rot2*delta_rot2+alpha_2*delta_trans*delta_trans;
     cv::Matx<double,3,3> Sigma;
-    Sigma(0,0)=sigma_rot1*sigma_rot1;
-    Sigma(1,1)=sigma_trans*sigma_trans;
-    Sigma(2,2)=sigma_rot2*sigma_rot2;
+    Sigma(0,0)=var_rot1;
+    Sigma(1,1)=var_trans;
+    Sigma(2,2)=var_rot2;
 
 
     cv::Matx<double,3,3> J;
