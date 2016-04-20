@@ -1,6 +1,6 @@
 alpha_1: 0.001  # meters/meter
 alpha_2: 0.001 # meters/degree
-alpha_3: 1.0   # degrees/meter
+alpha_3: 0.001   # degrees/meter
 alpha_4: 0.001  # degrees/degree
 
 # ICP PARAMETERS
