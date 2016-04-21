@@ -2,11 +2,11 @@
 <launch>
   <arg name="scan_topic" default="scan" />
   <arg name="rosbag_file_1" default="homework1/dataset/dataset_2013-10-09-15-10-03.bag" />
-  <arg name="map_file" default="$(find advanced_robotics)/homework1/maps/gmapping/map_particles_30" />
+  <arg name="map_file" default="$(find advanced_robotics)/homework1/maps/gmapping/map" />
 
   <param name="use_sim_time" value="true" />
 
-  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ekf_localization)/rviz/gmapping.rviz" />
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find advanced_robotics)/rviz/amcl.rviz" />
   <node name="odom_node" pkg="ekf_localization" type="odom_node" output="screen"/>
   <node name="ekf_localization_node" pkg="ekf_localization" type="ekf_localization_test" output="screen" args="$(arg map_file).pgm">
     <rosparam file="$(find ekf_localization)/config/parameters.yaml" command="load" />

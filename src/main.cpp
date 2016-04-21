@@ -23,8 +23,8 @@ int main(int argc, char *argv[])
 
     cv::namedWindow(name);
     double init_x, init_y, init_theta;
-    priv_node.param("init_x", init_x, 0.0);
-    priv_node.param("init_y", init_y, 0.0);
+    priv_node.param("init_x", init_x, 1.5);
+    priv_node.param("init_y", init_y, 4.0);
     priv_node.param("init_theta", init_theta, 0.0);
 
     kalman k(node,map,init_x,init_y,init_theta,spin_rate);

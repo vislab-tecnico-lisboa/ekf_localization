@@ -10,3 +10,6 @@ ransac_iterations: 2000
 ransac_outlier_threshold: 0.1
 icp_score_scale: 200.0
 icp_optimization_epsilon: 0.0000001
+
+init_x: 0.0
+init_y: 0.0

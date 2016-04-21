@@ -60,9 +60,9 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     this->X[1] = y_init;
     this->X[2] = theta_init;
 
-    this->P(0,0) = 0.1;
-    this->P(1,1) = 0.1;
-    this->P(2,2) = 0.1;
+    this->P(0,0) = 100000000000.1;
+    this->P(1,1) = 100000000000.1;
+    this->P(2,2) = 3.14;
 
     this->X_acum[0] = x_init;
     this->X_acum[1] = y_init;
@@ -114,7 +114,7 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     map_features->header.frame_id="map";
     point_type point;//=point_type(255, 0, 0);
 
-    double map_scale=0.05;
+    double map_scale=0.029999;
     /*for(unsigned int i=0; i<map_features_cv.size();++i)
     {
         point.x=map_scale*map_features_cv[i].x;
@@ -126,8 +126,8 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     //sleep(5.0); //GIVE TIME TO TF
     for(unsigned int i=0; i<map_features_cv.size();++i)
     {
-        point.x=map_scale*map_features_cv[i].x;
-        point.y=-map_scale*map_features_cv[i].y;
+        point.x=map_scale*map_features_cv[i].x-0.13;
+        point.y=-map_scale*map_features_cv[i].y-0.13;
         point.z=0.0;
         point.intensity=1.0;
         map_features->push_back(point);
