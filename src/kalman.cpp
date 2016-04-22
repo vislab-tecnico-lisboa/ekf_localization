@@ -1,6 +1,6 @@
 #include "kalman.hpp"
 
-EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_)
+EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double voxel_grid_size_)
     : nh_priv("~"),
       map(pmap.clone()),
       linear(0),
@@ -15,14 +15,23 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double
       odom_initializing_(false),
       laser_initializing_(false)
 {
+    nh_priv.param<std::string>("base_frame_id",base_link, "base_link");
+    nh_priv.param<std::string>("odom_frame_id",odom_link, "odom");
+    nh_priv.param<std::string>("map_frame_id",map_link, "map");
 
-    nh_priv.param<std::string>("base_link",base_link, "base_link");
-    nh_priv.param<std::string>("odom_link",odom_link, "odom");
+    double x_init, y_init, theta_init, initial_cov_xx, initial_cov_yy, initial_cov_aa;
+    nh_priv.param("initial_pose_x",x_init, 0.0);
+    nh_priv.param("initial_pose_y",y_init, 0.0);
+    nh_priv.param("initial_pose_a",theta_init, 0.0);
+    nh_priv.param("initial_cov_xx",initial_cov_xx, 0.25);
+    nh_priv.param("initial_cov_yy",initial_cov_yy, 0.25);
+    nh_priv.param("initial_cov_aa",initial_cov_aa, pow(M_PI/12.0,2));
 
     nh_priv.param("alpha_1",alpha_1, 0.05);
     nh_priv.param("alpha_2",alpha_2, 0.001);
     nh_priv.param("alpha_3",alpha_3, 5.0);
     nh_priv.param("alpha_4",alpha_4, 0.05);
+
     nh_priv.param("max_correspondence_distance",max_correspondence_distance, 100.0);
     nh_priv.param("max_iterations",max_iterations, 1000);
     nh_priv.param("ransac_iterations",ransac_iterations, 1000);
@@ -30,10 +39,23 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double
     nh_priv.param("icp_optimization_epsilon",icp_optimization_epsilon, 0.0000001);
     nh_priv.param("icp_score_scale",icp_score_scale, 100.0);
 
+    ROS_INFO_STREAM("base_frame_id:"<<base_link);
+    ROS_INFO_STREAM("odom_frame_id:"<<odom_link);
+    ROS_INFO_STREAM("map_frame_id:"<<map_link);
+
+    ROS_INFO_STREAM("initial_pose_x:"<<x_init);
+    ROS_INFO_STREAM("initial_pose_y:"<<y_init);
+    ROS_INFO_STREAM("initial_pose_a:"<<theta_init);
+
+    ROS_INFO_STREAM("initial_cov_xx:"<<initial_cov_xx);
+    ROS_INFO_STREAM("initial_cov_yy:"<<initial_cov_yy);
+    ROS_INFO_STREAM("initial_cov_aa:"<<initial_cov_aa);
+
     ROS_INFO_STREAM("alpha_1:"<<alpha_1);
     ROS_INFO_STREAM("alpha_2:"<<alpha_2);
     ROS_INFO_STREAM("alpha_3:"<<alpha_3);
     ROS_INFO_STREAM("alpha_4:"<<alpha_4);
+
     ROS_INFO_STREAM("max_correspondence_distance:"<<max_correspondence_distance);
     ROS_INFO_STREAM("max_iterations:"<<max_iterations);
     ROS_INFO_STREAM("ransac_iterations:"<<ransac_iterations);
@@ -49,9 +71,6 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double
     this->map_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/map_features",1);
     this->local_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/local_features",1);
 
-    base_link="/base_link";
-    odom_link="/odom";
-    map_link="/map";
     laser_link="/laser_frame";
 
     /****************************
@@ -106,16 +125,16 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double
     /****************************
      * Linear prior DENSITY     *
      ***************************/
-     // Continuous Gaussian prior (for Kalman filters)
+    // Continuous Gaussian prior (for Kalman filters)
     BFL::ColumnVector prior_mu(3);
     prior_mu(1) = x_init;
     prior_mu(2) = y_init;
     prior_mu(2) = theta_init;
     BFL::SymmetricMatrix prior_cov(3);
     prior_cov=0.0;
-    prior_cov(1,1) = 1.0;
-    prior_cov(2,2) = 1.0;
-    prior_cov(3,3) = 1.0;
+    prior_cov(1,1) = initial_cov_xx;
+    prior_cov(2,2) = initial_cov_yy;
+    prior_cov(3,3) = initial_cov_aa;
     BFL::Gaussian prior(prior_mu,prior_cov);
 
 
@@ -134,8 +153,9 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double
 
     std::vector<cv::Point2f> map_features_cv=features_extractor.mapFeatures(this->map);
     map_features_aux->resize(map_features_cv.size());
-    map_features->header.frame_id="map";
-    point_type point;//=point_type(255, 0, 0);
+    map_features->is_dense=false;
+    map_features->header.frame_id=map_link;
+    //=point_type(255, 0, 0);
 
     double map_scale=0.029999;
     /*for(unsigned int i=0; i<map_features_cv.size();++i)
@@ -149,6 +169,7 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double
     //sleep(5.0); //GIVE TIME TO TF
     for(unsigned int i=0; i<map_features_cv.size();++i)
     {
+        point_type point;
         point.x=map_scale*map_features_cv[i].x-0.13;
         point.y=-map_scale*map_features_cv[i].y-0.13;
         point.z=0.0;
@@ -219,13 +240,10 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     }
 
     tf::StampedTransform laserToBaseTf;
-    tf::StampedTransform mapToBaseTf;
     try
     {
         listener->waitForTransform(map_link, laser_link, filter_stamp_, ros::Duration(0.01) );
         listener->lookupTransform(map_link, laser_link, filter_stamp_, laserToBaseTf);
-        listener->waitForTransform(map_link, map_link, filter_stamp_, ros::Duration(0.01) );
-        listener->lookupTransform(map_link, map_link, filter_stamp_, mapToBaseTf);
     }
     catch(tf::TransformException& ex)
     {
@@ -234,11 +252,9 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 
     }
 
-    Eigen::Matrix4f mapToBaseEigen;
     Eigen::Matrix4f laserToBaseEigen;
 
     pcl_ros::transformAsMatrix(laserToBaseTf, laserToBaseEigen);
-    pcl_ros::transformAsMatrix(mapToBaseTf, mapToBaseEigen);
 
     laser->resize(msg->ranges.size());
     laser->header.frame_id=base_link;
@@ -253,7 +269,9 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         point.x = msg->ranges[i]*cos(angle_);
         point.y = msg->ranges[i]*sin(angle_);
         point.z = 0.0;
-        point.intensity=1.0/sqrt(point.x*point.x+point.y*point.y);
+        //point.intensity=1.0/sqrt(point.x*point.x+point.y*point.y);
+        point.intensity=1.0;
+
         (*laser)[i]=point;
     }
 
@@ -274,17 +292,13 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     laser_in_base_link->header.frame_id=map_link;
     pcl_conversions::toPCL(filter_stamp_, laser_in_base_link->header.stamp);
 
-    // Transform map to base link
-    pcl::PointCloud<point_type>::Ptr map_in_base_link (new pcl::PointCloud<point_type>());
-    pcl::transformPointCloud (*map_features, *map_in_base_link, mapToBaseEigen);
-    map_in_base_link->is_dense=false;
-    map_in_base_link->header.frame_id=base_link;
-    pcl_conversions::toPCL(filter_stamp_, map_in_base_link->header.stamp);
+
+    pcl_conversions::toPCL(filter_stamp_, map_features->header.stamp);
 
     // Compute ICP
     pcl::IterativeClosestPoint<point_type, point_type> icp;
     icp.setInputSource(laser_in_base_link);
-    icp.setInputTarget(map_in_base_link);
+    icp.setInputTarget(map_features);
     icp.setTransformationEpsilon (icp_optimization_epsilon);
     icp.setMaxCorrespondenceDistance(max_correspondence_distance); //10
 
@@ -296,34 +310,34 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 
     Final.header.frame_id=map_link;
 
-    Eigen::Matrix4f correction_transform_=icp.getFinalTransformation();
 
-    //angleOverflowCorrect(res[2]);
-
-
-    BFL::ColumnVector observation_mean(3);
-    BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
-
-    observation_mean(1)=correction_transform_(0,3)+posterior->ExpectedValueGet()(1);
-    observation_mean(2)=correction_transform_(1,3)+posterior->ExpectedValueGet()(2);
-    observation_mean(3)=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2)+posterior->ExpectedValueGet()(3);
-
-    BFL::SymmetricMatrix observation_noise(3);
-    observation_noise=0.0;
-    observation_noise(1,1) = icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
-    observation_noise(2,2) = icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
-    observation_noise(3,3) = icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
-
-    meas_pdf->AdditiveNoiseSigmaSet(observation_noise);
-    filter->Update(meas_model.get(),observation_mean);
 
     if(icp.hasConverged())
     {
+        Eigen::Matrix4f correction_transform_=icp.getFinalTransformation();
+
+        BFL::ColumnVector observation_mean(3);
+        BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
+        double angle=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2)+posterior->ExpectedValueGet()(3);
+        angleOverflowCorrect(angle);
+        observation_mean(1)=correction_transform_(0,3)+posterior->ExpectedValueGet()(1);
+        observation_mean(2)=correction_transform_(1,3)+posterior->ExpectedValueGet()(2);
+        observation_mean(3)=angle;
+        BFL::SymmetricMatrix observation_noise(3);
+        double icp_fitness_score=icp.getFitnessScore(max_correspondence_distance);
+        observation_noise=0.0;
+        observation_noise(1,1) = icp_score_scale*icp_fitness_score;
+        observation_noise(2,2) = icp_score_scale*icp_fitness_score;
+        observation_noise(3,3) = icp_score_scale*icp_fitness_score;
+
+        meas_pdf->AdditiveNoiseSigmaSet(observation_noise);
+        filter->Update(meas_model.get(),observation_mean);
+
         broadcast();
     }
     else
     {
-        ROS_ERROR("DIDN_TE CONVERFGE");
+        ROS_ERROR("ICP DID NOT CONVERGE");
     }
 
     local_features_pub.publish(Final);
@@ -367,12 +381,29 @@ bool EKFnode::predict()
     control_mean(2)=delta_trans;
     control_mean(3)=delta_rot2;
 
-    BFL::SymmetricMatrix control_noise(3);
+    BFL::Matrix control_noise(3,3);
     control_noise=0.0;
     control_noise(1,1) = var_rot1;
     control_noise(2,2) = var_trans;
     control_noise(3,3) = var_rot2;
-    sys_pdf->AdditiveNoiseSigmaSet(control_noise);
+
+    // Linearize control noise
+    BFL::Matrix J(3,3);
+    J(1,1)=-sin(filter->PostGet()->ExpectedValueGet()(3)+delta_rot1)*delta_trans;
+    J(1,2)=cos(filter->PostGet()->ExpectedValueGet()(3)+delta_rot1);
+    J(2,2)=0;
+
+    J(2,1)=cos(filter->PostGet()->ExpectedValueGet()(3)+delta_rot1)*delta_trans;
+    J(2,2)=sin(filter->PostGet()->ExpectedValueGet()(3)+delta_rot1);
+    J(2,3)=0;
+
+    J(3,1)=1;
+    J(3,2)=0;
+    J(3,3)=1;
+
+    BFL::SymmetricMatrix R(J*control_noise*J.transpose());
+
+    sys_pdf->AdditiveNoiseSigmaSet(R);
     filter->Update(sys_model.get(),control_mean);
 
     broadcast();
@@ -399,9 +430,9 @@ void EKFnode::broadcast()
     try
     {
         tf::Transform tmp_tf(tf::createQuaternionFromYaw(estimated_mean(3)),
-                tf::Vector3(estimated_mean(1),
-                estimated_mean(2),
-                0.0));
+                             tf::Vector3(estimated_mean(1),
+                                         estimated_mean(2),
+                                         0.0));
         tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
                                               filter_stamp_,
                                               base_link); // base to map

@@ -116,17 +116,17 @@ Matrix NonLinearAnalyticConditionalGaussianMobile::dfGet(unsigned int i) const
         //std::cout << "state:"<< state << std::endl;
 
         Matrix df(3,3);
-        df(1,1)=-sin(state(3)+delta_odom(1))*delta_odom(2);
-        df(1,2)=cos(state(3)+delta_odom(1));
-        df(2,2)=0;
+//        df(1,1)=-sin(state(3)+delta_odom(1))*delta_odom(2);
+//        df(1,2)=cos(state(3)+delta_odom(1));
+//        df(2,2)=0;
 
-        df(2,1)=cos(state(3)+delta_odom(1))*delta_odom(2);
-        df(2,2)=sin(state(3)+delta_odom(1));
-        df(2,3)=0;
+//        df(2,1)=cos(state(3)+delta_odom(1))*delta_odom(2);
+//        df(2,2)=sin(state(3)+delta_odom(1));
+//        df(2,3)=0;
 
-        df(3,1)=1;
-        df(3,2)=0;
-        df(3,3)=1;
+//        df(3,1)=1;
+//        df(3,2)=0;
+//        df(3,3)=1;
 
 
         df(1,1)=1;

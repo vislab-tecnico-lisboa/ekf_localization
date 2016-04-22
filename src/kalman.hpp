@@ -131,7 +131,7 @@ public:
 
 
 
-    EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_=0.005);
+    EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double voxel_grid_size_=0.005);
     void broadcast();
 
     bool predict();
@@ -147,7 +147,7 @@ public:
 
     void spin()
     {
-        broadcast();
+        //broadcast();
 
         Eigen::Matrix2f covMatrix;
         BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
