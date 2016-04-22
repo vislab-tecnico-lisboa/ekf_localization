@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
     priv_node.param("init_y", init_y, 4.0);
     priv_node.param("init_theta", init_theta, 0.0);
 
-    kalman k(node,map,init_x,init_y,init_theta,spin_rate);
+    EKFnode k(node,map,init_x,init_y,init_theta,spin_rate);
 
     ros::Rate rate(spin_rate);
     while(ros::ok())

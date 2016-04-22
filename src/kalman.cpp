@@ -1,6 +1,6 @@
 #include "kalman.hpp"
 
-kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_)
+EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y_init, double theta_init, int spin_rate, double voxel_grid_size_)
     : nh_priv("~"),
       map(pmap.clone()),
       linear(0),
@@ -44,9 +44,7 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     alpha_2=alpha_2*180/M_PI; // Convert to radian
     alpha_3=alpha_3*M_PI/180; // Convert to radians
 
-    //this->cmd_sub = nh.subscribe("odom", 1, &kalman::odometry_callback, this);
-    this->laser_sub = nh.subscribe("scan", 1, &kalman::laser_callback, this);
-    this->bpgt_sub = nh.subscribe("base_pose_ground_truth", 1, &kalman::pose_callback, this);
+    this->laser_sub = nh.subscribe("scan", 1, &EKFnode::laser_callback, this);
     this->location_undertainty = nh.advertise<visualization_msgs::Marker>("/location_undertainty",1);
     this->map_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/map_features",1);
     this->local_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/local_features",1);
@@ -56,52 +54,77 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     map_link="/map";
     laser_link="/laser_frame";
 
-    this->X[0] = x_init;
-    this->X[1] = y_init;
-    this->X[2] = theta_init;
+    /****************************
+     * NonLinear system model   *
+     ***************************/
+    // create gaussian
+    BFL::ColumnVector sys_noise_mu(3);
+    sys_noise_mu(1) = 0.0;
+    sys_noise_mu(2) = 0.0;
+    sys_noise_mu(3) = 0.0;
 
-    this->P(0,0) = 100000000000.1;
-    this->P(1,1) = 100000000000.1;
-    this->P(2,2) = 3.14;
+    BFL::SymmetricMatrix sys_noise_cov(3);
+    sys_noise_cov = 0.0;
+    sys_noise_cov(1,1) = 1.0;
+    sys_noise_cov(2,2) = 1.0;
+    sys_noise_cov(3,3) = 1.0;
 
-    this->X_acum[0] = x_init;
-    this->X_acum[1] = y_init;
-    this->X_acum[2] = theta_init;
+    BFL::Gaussian system_uncertainty(sys_noise_mu, sys_noise_cov);
+    sys_pdf = boost::shared_ptr<BFL::NonLinearAnalyticConditionalGaussianMobile> (new  BFL::NonLinearAnalyticConditionalGaussianMobile(system_uncertainty));
+    sys_model = boost::shared_ptr<BFL::AnalyticSystemModelGaussianUncertainty> (new BFL::AnalyticSystemModelGaussianUncertainty (sys_pdf.get()));
+    //double var_rot1=alpha_1*delta_rot1*delta_rot1+alpha_2*delta_trans*delta_trans;
+    //double var_trans=alpha_3*delta_trans*delta_trans+alpha_4*(delta_rot1*delta_rot1+delta_rot2*delta_rot2);
+    //double var_rot2=alpha_1*delta_rot2*delta_rot2+alpha_2*delta_trans*delta_trans;
 
-    this->F(0,0) = 1;
-    this->F(1,1) = 1;
-    this->F(2,2) = 1;
+    /*********************************
+     * Initialise measurement model *
+     ********************************/
 
-    this->I(0,0) = 1;
-    this->I(1,1) = 1;
-    this->I(2,2) = 1;
+    // create matrix H for linear measurement model
+    BFL::Matrix H(3,3);
+    H = 0.0;
+    H(1,1) = 1.0;
+    H(2,2) = 1.0;
+    H(3,3) = 1.0;
+
+    // Construct the measurement noise (a scalar in this case)
+    BFL::ColumnVector measNoise_Mu(3);
+    measNoise_Mu = 0.0;
+
+    BFL::SymmetricMatrix measNoise_Cov(3);
+    measNoise_Cov(1,1) = 1.0;
+    measNoise_Cov(2,2) = 1.0;
+    measNoise_Cov(3,3) = 1.0;
+
+    BFL::Gaussian measurement_uncertainty(measNoise_Mu, measNoise_Cov);
+
+    // create the model
+    meas_pdf=boost::shared_ptr<BFL::LinearAnalyticConditionalGaussian> (new BFL::LinearAnalyticConditionalGaussian(H, measurement_uncertainty));
+    meas_model=boost::shared_ptr<BFL::LinearAnalyticMeasurementModelGaussianUncertainty> (new BFL::LinearAnalyticMeasurementModelGaussianUncertainty(meas_pdf.get()));
 
 
+    /****************************
+     * Linear prior DENSITY     *
+     ***************************/
+     // Continuous Gaussian prior (for Kalman filters)
+    BFL::ColumnVector prior_mu(3);
+    prior_mu(1) = x_init;
+    prior_mu(2) = y_init;
+    prior_mu(2) = theta_init;
+    BFL::SymmetricMatrix prior_cov(3);
+    prior_cov=0.0;
+    prior_cov(1,1) = 1.0;
+    prior_cov(2,2) = 1.0;
+    prior_cov(3,3) = 1.0;
+    BFL::Gaussian prior(prior_mu,prior_cov);
 
-    // odometry cov
-    this->Q(0,0) = 0.001;
-    this->Q(1,1) = 0.001;
 
-    //this->Q(0,1) = 0.00001;
-    //this->Q(1,0) = 0.00001;
+    /******************************
+     * Construction of the Filter *
+     ******************************/
+    filter=boost::shared_ptr<BFL::ExtendedKalmanFilter> (new BFL::ExtendedKalmanFilter(&prior));
 
-    this->Q(0,2) = 0.0002;
-    this->Q(1,2) = 0.0002;
 
-    this->Q(2,0) = 0.0002;
-    this->Q(2,1) = 0.0002;
-
-    this->Q(2,2) = 0.005;
-
-    // obs model
-    this->H(0,0) = 1;
-    this->H(1,1) = 1;
-    this->H(2,2) = 1;
-
-    // laser cov
-    this->R(0,0) = 0.1;
-    this->R(1,1) = 0.1;
-    this->R(2,2) = 0.1;
 
     //Bound image by occupied cells.
     this->map.row(0) = cv::Scalar(0);
@@ -139,7 +162,6 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
     voxel_grid.filter (*map_features);
 
     // Get Transform from laser to base frame
-
     tf::StampedTransform laserToBaseTf;
     while(ros::ok())
     {
@@ -163,9 +185,8 @@ kalman::kalman(ros::NodeHandle& nh, const cv::Mat& pmap, double x_init, double y
 }
 
 
-void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
+void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 {
-
     laser_stamp_=msg->header.stamp;
     filter_stamp_=laser_stamp_;
     if (!laser_active_)
@@ -194,7 +215,6 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 
     if(!predict())
     {
-        std::cout << "ups"<< std::endl;
         return;
     }
 
@@ -219,8 +239,6 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 
     pcl_ros::transformAsMatrix(laserToBaseTf, laserToBaseEigen);
     pcl_ros::transformAsMatrix(mapToBaseTf, mapToBaseEigen);
-
-
 
     laser->resize(msg->ranges.size());
     laser->header.frame_id=base_link;
@@ -278,23 +296,27 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 
     Final.header.frame_id=map_link;
 
-    R(0,0)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
-    R(1,1)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
-    R(2,2)=icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
-    //Eigen::Matrix4f correction_transform_map_frame=icp.getFinalTransformation();
     Eigen::Matrix4f correction_transform_=icp.getFinalTransformation();
 
-    cv::Vec3d res;
+    //angleOverflowCorrect(res[2]);
 
-    res[0]=correction_transform_(0,3);
-    res[1]=correction_transform_(1,3);
-    res[2]=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2);
 
-    angleOverflowCorrect(res[2]);
+    BFL::ColumnVector observation_mean(3);
+    BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
 
-    correct(res);
+    observation_mean(1)=correction_transform_(0,3)+posterior->ExpectedValueGet()(1);
+    observation_mean(2)=correction_transform_(1,3)+posterior->ExpectedValueGet()(2);
+    observation_mean(3)=correction_transform_.block<3,3>(0,0).eulerAngles (0,1,2)(2)+posterior->ExpectedValueGet()(3);
 
-    //std::cout << res << std::endl;
+    BFL::SymmetricMatrix observation_noise(3);
+    observation_noise=0.0;
+    observation_noise(1,1) = icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
+    observation_noise(2,2) = icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
+    observation_noise(3,3) = icp_score_scale*icp.getFitnessScore(max_correspondence_distance);
+
+    meas_pdf->AdditiveNoiseSigmaSet(observation_noise);
+    filter->Update(meas_model.get(),observation_mean);
+
     if(icp.hasConverged())
     {
         broadcast();
@@ -304,13 +326,12 @@ void kalman::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         ROS_ERROR("DIDN_TE CONVERFGE");
     }
 
-    //pcl::transformPointCloud (*laser_in_base_link, *laser_in_base_link, correction_transform_);
     local_features_pub.publish(Final);
     return;
 }
 
 
-bool kalman::predict()
+bool EKFnode::predict()
 {
 
     tf::StampedTransform baseDeltaTf;
@@ -328,42 +349,31 @@ bool kalman::predict()
         return false;
     }
 
+    // Get control input
     double dx=baseDeltaTf.getOrigin().getX();
     double dy=baseDeltaTf.getOrigin().getY();
     double d_theta=baseDeltaTf.getRotation().getAxis()[2]*baseDeltaTf.getRotation().getAngle();
-
-    //std::cout << "dy:"<< dy << " dx:" << dx << " dtheta:" <<d_theta<<  std::endl;
 
     double delta_rot1=atan2(dy,dx);
     double delta_trans=sqrt(dx*dx+dy*dy);
     double delta_rot2=d_theta-delta_rot1;
 
-    this->X[0] += cos(this->X[2]+delta_rot1)*delta_trans;
-    this->X[1] += sin(this->X[2]+delta_rot1)*delta_trans;
-    this->X[2] += d_theta;
-
-
-    angleOverflowCorrect(this->X[2]);
-    //std::cout << delta_trans << std::endl;
-
     double var_rot1=alpha_1*delta_rot1*delta_rot1+alpha_2*delta_trans*delta_trans;
     double var_trans=alpha_3*delta_trans*delta_trans+alpha_4*(delta_rot1*delta_rot1+delta_rot2*delta_rot2);
     double var_rot2=alpha_1*delta_rot2*delta_rot2+alpha_2*delta_trans*delta_trans;
-    cv::Matx<double,3,3> Sigma;
-    Sigma(0,0)=var_rot1;
-    Sigma(1,1)=var_trans;
-    Sigma(2,2)=var_rot2;
 
+    BFL::ColumnVector control_mean(3);
+    control_mean(1)=delta_rot1;
+    control_mean(2)=delta_trans;
+    control_mean(3)=delta_rot2;
 
-    cv::Matx<double,3,3> J;
-    J(0,0)=-sin(delta_rot1); J(0,1)=cos(delta_rot1); J(0,2)=0;
-    J(1,0)=cos(delta_rot1);  J(1,1)=sin(delta_rot1);  J(1,2)=0;
-    J(2,0)=1;  J(2,1)=0;  J(2,2)=1;
-
-
-    P += J*Sigma*J.t();
-    P = (P + P.t()) * 0.5;
-
+    BFL::SymmetricMatrix control_noise(3);
+    control_noise=0.0;
+    control_noise(1,1) = var_rot1;
+    control_noise(2,2) = var_trans;
+    control_noise(3,3) = var_rot2;
+    sys_pdf->AdditiveNoiseSigmaSet(control_noise);
+    filter->Update(sys_model.get(),control_mean);
 
     broadcast();
 
@@ -371,38 +381,26 @@ bool kalman::predict()
     return true;
 }
 
-void kalman::correct(const cv::Vec3d & res)
-{
 
-
-    cv::Matx<double,3,3> S = H * P * H.t() + R;
-    cv::Matx<double,3,3> K = P * H.t() * S.inv();
-
-    //std::cout << std::endl << "K" << cv::Mat(K) << std::endl;
-
-    X += K*res;
-    angleOverflowCorrect(this->X[2]);
-    //std::cout << "X" << cv::Point3d(X) << std::endl;
-
-    P = (I - K * H) * P;
-    P = (P + P.t()) * 0.5;
-    //std::cout << "P" << std::endl << cv::Mat(P) << std::endl;
-
-}
-
-void kalman::sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_)
+void EKFnode::sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_)
 {
     tf_broadcaster.sendTransform(tf::StampedTransform(transform_, time_stamp_, target_frame_, origin_frame_));
 }
 
-void kalman::broadcast()
+void EKFnode::broadcast()
 {
+    BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
+
+    BFL::ColumnVector estimated_mean=posterior->ExpectedValueGet();
+
+    BFL::SymmetricMatrix estimated_cov=posterior->CovarianceGet();
+
     tf::Stamped<tf::Pose> odom_to_map;
     try
     {
-        tf::Transform tmp_tf(tf::createQuaternionFromYaw(this->X[2]),
-                tf::Vector3(this->X[0],
-                this->X[1],
+        tf::Transform tmp_tf(tf::createQuaternionFromYaw(estimated_mean(3)),
+                tf::Vector3(estimated_mean(1),
+                estimated_mean(2),
                 0.0));
         tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
                                               filter_stamp_,
@@ -428,13 +426,7 @@ void kalman::broadcast()
     tf_broadcaster.sendTransform(tmp_tf_stamped);
 }
 
-
-
-
-
-
-
-void kalman::drawCovariance(const Eigen::Vector2f& mean, const Eigen::Matrix2f& covMatrix)
+void EKFnode::drawCovariance(const Eigen::Matrix2f& covMatrix)
 {
     visualization_msgs::Marker tempMarker;
     tempMarker.pose.position.x = 0;
@@ -467,27 +459,4 @@ void kalman::drawCovariance(const Eigen::Vector2f& mean, const Eigen::Matrix2f& 
     tempMarker.id = 0;
 
     location_undertainty.publish(tempMarker);
-}
-
-
-void kalman::pose_callback(const nav_msgs::Odometry msg)
-{
-    this->gt_x = -msg.pose.pose.position.y;
-    this->gt_y = msg.pose.pose.position.x;
-
-    double roll, pitch, heading;
-
-    tf::Quaternion q (msg.pose.pose.orientation.x,
-                      msg.pose.pose.orientation.y,
-                      msg.pose.pose.orientation.z,
-                      msg.pose.pose.orientation.w);
-
-    tf::Matrix3x3(q).getRPY(roll, pitch, heading);
-
-    if(heading < -M_PI/2)
-        heading += 5*M_PI/2;
-    else
-        heading += M_PI/2;
-
-    this->gt_theta = heading;
 }

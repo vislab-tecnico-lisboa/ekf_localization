@@ -19,7 +19,7 @@ pcl_ros)
 
 catkin_package(
 #  INCLUDE_DIRS include
-#  LIBRARIES foveated_stereo_ros
+  LIBRARIES pose_estimation_ekf
 #  CATKIN_DEPENDS cv_bridge geometry_msgs message_filters roscpp sensor_msgs std_msgs tf
 #  DEPENDS system_lib
 #   CATKIN_DEPENDS message_runtime
@@ -36,14 +36,14 @@ include_directories(
 
 
 # catkin_add_nosetests(test)
-add_library(pose_estimation_ekf src/nonlinearanalyticconditionalgaussianmobile.cpp)
+add_library(pose_estimation_ekf src/bayesian_filtering/nonlinearanalyticconditionalgaussianmobile.cpp)
+target_link_libraries(pose_estimation_ekf ${BFL_LIBRARIES} )
 
 add_executable(odom_node src/odom.cpp)
 target_link_libraries(odom_node ${catkin_LIBRARIES} ${Boost_LIBRARIES})
 
-add_executable(ekf_localization_node src/bayesian_filtering/test/BayesianFilterNode.cpp)
-target_link_libraries(ekf_localization_node pose_estimation_ekf ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${BFL_LIBRARIES})
-add_dependencies(ekf_localization_node ekf_localization_node_gencpp)
+#add_executable(ekf_localization_node src/bayesian_filtering/test/BayesianFilterNode.cpp src/bayesian_filtering/nonlinearanalyticconditionalgaussianmobile.cpp)
+#target_link_libraries(ekf_localization_node pose_estimation_ekf ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${BFL_LIBRARIES} )
 
 add_executable(ekf_localization_test src/main.cpp src/kalman.cpp src/featuresextractor.cpp)
-target_link_libraries(ekf_localization_test ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${Boost_LIBRARIES})
+target_link_libraries(ekf_localization_test pose_estimation_ekf ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${Boost_LIBRARIES} ${BFL_LIBRARIES})
