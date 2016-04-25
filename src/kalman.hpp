@@ -141,7 +141,7 @@ class EKFnode
     double icp_score_scale;
 
     // aux vars
-    bool odom_active_, laser_active_, odom_initializing_,laser_initializing_;
+    bool odom_active_, laser_active_, odom_initializing_,laser_initializing_, filter_initialized_;
 
     BFL::ColumnVector last_laser_pose_;
     void laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg);
@@ -176,7 +176,7 @@ public:
 
 
     EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double voxel_grid_size_=0.005);
-    void broadcast();
+    void broadcast(const ros::Time & broad_cast_time);
 
     bool predict();
 
@@ -192,7 +192,7 @@ public:
     void spin()
     {
         //broadcast();
-
+        predict();
         Eigen::Matrix2f covMatrix;
         BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
         BFL::SymmetricMatrix estimated_cov=posterior->CovarianceGet();

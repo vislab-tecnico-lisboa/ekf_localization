@@ -10,7 +10,8 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double
       laser_active_(false),
       odom_initializing_(false),
       laser_initializing_(false),
-      first_map_received_(false)
+      first_map_received_(false),
+      filter_initialized_(false)
 {
     nh_priv.param<std::string>("base_frame_id",base_link, "base_link");
     nh_priv.param<std::string>("odom_frame_id",odom_link, "odom");
@@ -190,7 +191,7 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double
 void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 {
     laser_stamp_=msg->header.stamp;
-    filter_stamp_=laser_stamp_;
+    //filter_stamp_=laser_stamp_;
     if (!laser_active_)
     {
         if (!laser_initializing_)
@@ -215,30 +216,38 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         }
     }
 
-    if(!predict())
-    {
-        return;
-    }
-
     // Where was the robot when this scan was taken?
-    tf::Stamped<tf::Pose> pose;
-    if(!getOdomPose(latest_odom_pose_, pose.v[0], pose.v[1], pose.v[2],
-                    laser_scan->header.stamp, base_frame_id_))
-    {
-      ROS_ERROR("Couldn't determine robot's pose associated with laser scan");
-      return;
-    }
+//    tf::Stamped<tf::Pose> pose;
+//    if(!getOdomPose(latest_odom_pose_, pose.v[0], pose.v[1], pose.v[2],
+//                    msg->header.stamp, base_link))
+//    {
+//        ROS_ERROR("Couldn't determine robot's pose associated with laser scan");
+//        return;
+//    }
+
+
+//    tf::Stamped<tf::Pose> delta = pf_vector_zero();
+
+//    if(pf_init_)
+//    {
+//        // Compute change in pose
+//        //delta = pf_vector_coord_sub(pose, pf_odom_pose_);
+//        delta.v[0] = pose.v[0] - filter_odom_pose_.v[0];
+//        delta.v[1] = pose.v[1] - filter_odom_pose_.v[1];
+//        delta.v[2] = angle_diff(pose.v[2], filter_odom_pose_.v[2]);
+
+//        // See if we should update the filter
+//        bool update = fabs(delta.v[0]) > d_thresh_ ||
+//                fabs(delta.v[1]) > d_thresh_ ||
+//                fabs(delta.v[2]) > a_thresh_;
+
+//        // Set the laser update flags
+//        if(!update)
+//            return;
+//    }
 
     // If the robot has moved, update the filter
 
-    //    delta.v[0] = pose.v[0] - pf_odom_pose_.v[0];
-    //    delta.v[1] = pose.v[1] - pf_odom_pose_.v[1];
-    //    delta.v[2] = angle_diff(pose.v[2], pf_odom_pose_.v[2]);
-
-    //    // See if we should update the filter
-    //    bool update = fabs(delta.v[0]) > d_thresh_ ||
-    //                  fabs(delta.v[1]) > d_thresh_ ||
-    //                  fabs(delta.v[2]) > a_thresh_;
     tf::StampedTransform laserToBaseTf;
     try
     {
@@ -310,8 +319,6 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 
     Final.header.frame_id=map_link;
 
-
-
     if(icp.hasConverged())
     {
         Eigen::Matrix4f correction_transform_=icp.getFinalTransformation();
@@ -333,7 +340,7 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         meas_pdf->AdditiveNoiseSigmaSet(observation_noise);
         filter->Update(meas_model.get(),observation_mean);
 
-        broadcast();
+        broadcast(laser_stamp_);
     }
     else
     {
@@ -350,11 +357,12 @@ bool EKFnode::predict()
 
     tf::StampedTransform baseDeltaTf;
 
+    ros::Time predict_time_=ros::Time::now();
     // Get delta motion in cartesian coordinates with TF
     try
     {
-        listener->waitForTransform(base_link, filter_stamp_old_, base_link, filter_stamp_ , odom_link, ros::Duration(0.01) );
-        listener->lookupTransform(base_link, filter_stamp_old_, base_link, filter_stamp_, odom_link, baseDeltaTf); // delta position
+        listener->waitForTransform(base_link, filter_stamp_old_, base_link, predict_time_ , odom_link, ros::Duration(0.01) );
+        listener->lookupTransform(base_link, filter_stamp_old_, base_link, predict_time_, odom_link, baseDeltaTf); // delta position
 
     }
     catch (tf::TransformException &ex)
@@ -406,9 +414,20 @@ bool EKFnode::predict()
     sys_pdf->AdditiveNoiseSigmaSet(R);
     filter->Update(sys_model.get(),control_mean);
 
-    broadcast();
+    broadcast(predict_time_);
 
-    filter_stamp_old_=filter_stamp_;
+    filter_stamp_=predict_time_;
+    // Update filter stamp
+
+    if(!filter_initialized_)
+    {
+        // Pose at last filter update
+        //filter_odom_pose_ = pose;
+
+        // Filter is now initialized
+        filter_initialized_ = true;
+    }
+
     return true;
 }
 
@@ -418,7 +437,7 @@ void EKFnode::sendTransform(const tf::Transform & transform_, const ros::Time & 
     tf_broadcaster.sendTransform(tf::StampedTransform(transform_, time_stamp_, target_frame_, origin_frame_));
 }
 
-void EKFnode::broadcast()
+void EKFnode::broadcast(const ros::Time & broad_cast_time)
 {
     BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
 
@@ -434,7 +453,7 @@ void EKFnode::broadcast()
                                          estimated_mean(2),
                                          0.0));
         tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
-                                              filter_stamp_,
+                                              broad_cast_time,
                                               base_link); // base to map
         this->listener->transformPose(odom_link,
                                       tmp_tf_stamped,
