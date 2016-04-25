@@ -7,14 +7,19 @@
 #include <boost/nondet_random.hpp>
 #include <boost/random/normal_distribution.hpp>
 
-#include "ros/ros.h"
-#include "geometry_msgs/Twist.h"
-#include "nav_msgs/Odometry.h"
-#include "sensor_msgs/LaserScan.h"
-#include <tf/tf.h>
-#include "tf/transform_broadcaster.h"
 #include <Eigen/Core>
 #include <Eigen/Eigen>
+
+#include <ros/ros.h>
+#include <geometry_msgs/Twist.h>
+#include <nav_msgs/Odometry.h>
+#include <nav_msgs/OccupancyGrid.h>
+#include <nav_msgs/GetMap.h>
+
+#include <sensor_msgs/LaserScan.h>
+#include <tf/tf.h>
+#include <tf/transform_broadcaster.h>
+
 #include <visualization_msgs/Marker.h>
 #include "featuresextractor.h"
 
@@ -46,32 +51,55 @@ struct rangle
     rangle(double r, double a) : range(r), angle(a) {}
 };
 
+
+class SensorModel
+{
+    typedef pcl::PointXYZI point_type;
+    pcl::PointCloud<point_type>::Ptr map_;
+
+    double beamRangeFinderModel(const pcl::PointCloud<point_type>::Ptr & laser_scan)
+    {
+        for(int i=0; i<laser_scan->size();++i)
+        {
+            
+        }
+    }
+
+public:
+    SensorModel(const pcl::PointCloud<point_type>::Ptr & map) : map_(map)
+    {
+
+    }
+
+
+};
+
 class EKFnode
 {
+    typedef pcl::PointXYZI point_type;
+    typedef pcl::PointCloud<point_type> map_t;
+    typedef map_t::Ptr map_t_ptr;
+
     // ROS stuff
     ros::NodeHandle nh_priv;
     tf::Transformer transformer_;
     ros::Time odom_stamp_, laser_stamp_, filter_stamp_,odom_init_stamp_,laser_init_stamp_,filter_stamp_old_;
-    bool odom_active_, laser_active_,odom_initializing_,laser_initializing_;
-    typedef pcl::PointXYZI point_type;
-    boost::shared_ptr<tf::TransformListener> listener;
 
+    boost::shared_ptr<tf::TransformListener> listener;
     Eigen::Matrix4f laserToMapEigen;
     Eigen::Matrix4f laserToBaseEigen;
-
     std::string base_link;
     std::string odom_link;
     std::string map_link;
     std::string laser_link;
-    cv::Mat map;
-    double gt_x, gt_y, gt_theta;
-    double linear, angular;
+    bool use_map_topic_, first_map_only_,first_map_received_;
     ros::Subscriber cmd_sub;
     ros::Subscriber laser_sub;
     ros::Subscriber bpgt_sub;
     ros::Publisher location_undertainty;
-    ros::Publisher map_features_pub;
+    ros::Publisher map__pub;
     ros::Publisher local_features_pub;
+    ros::Subscriber map_sub_;
 
     tf::TransformBroadcaster tf_broadcaster;
     tf::Transform latest_tf_;
@@ -94,10 +122,12 @@ class EKFnode
     cv::Matx<double,3,3> K;               //!< Kalman gain matrix (K(k)): K(k)=P'(k)*Ht*inv(H*P'(k)*Ht+R)
     cv::Matx<double,3,3> P;
     cv::Matx<double,3,3> R;
-    pcl::PointCloud<point_type>::Ptr map_features;
-    pcl::PointCloud<point_type>::Ptr map_features_aux;
+    pcl::PointCloud<point_type>::Ptr map_;
+
     double alpha_1, alpha_2, alpha_3, alpha_4;
+    double d_thresh_, a_thresh_;
     double voxel_grid_size;
+
 
     // ICP and vision stuff
     FeaturesExtractor features_extractor;
@@ -108,15 +138,24 @@ class EKFnode
     double icp_optimization_epsilon;
     double icp_score_scale;
 
+    // aux vars
+    bool odom_active_, laser_active_, odom_initializing_,laser_initializing_;
+
+    BFL::ColumnVector last_laser_pose_;
     void laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg);
     void sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_);
     void drawCovariance(const Eigen::Matrix2f& covMatrix);
     void drawFeatures();
+    void requestMap();
+    void mapReceived(const nav_msgs::OccupancyGridConstPtr& msg);
+    void handleMapMessage(const nav_msgs::OccupancyGrid& msg);
+    void convertMap( const nav_msgs::OccupancyGrid& map_msg );
+
 public:
 
     void publishFeatures()
     {
-        map_features_pub.publish(map_features);
+        map__pub.publish(map_);
     }
 
     cv::Vec3d getX()

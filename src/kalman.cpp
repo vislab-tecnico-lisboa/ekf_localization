@@ -3,21 +3,20 @@
 EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double voxel_grid_size_)
     : nh_priv("~"),
       map(pmap.clone()),
-      linear(0),
-      angular(0),
       listener(new tf::TransformListener(ros::Duration(10.0))),
-      map_features(new pcl::PointCloud<point_type>()),
-      map_features_aux(new pcl::PointCloud<point_type>()),
+      map_(new pcl::PointCloud<point_type>()),
       laser(new pcl::PointCloud<point_type>()),
       voxel_grid_size(voxel_grid_size_),
       odom_active_(false),
       laser_active_(false),
       odom_initializing_(false),
-      laser_initializing_(false)
+      laser_initializing_(false),
+      first_map_received_(false)
 {
     nh_priv.param<std::string>("base_frame_id",base_link, "base_link");
     nh_priv.param<std::string>("odom_frame_id",odom_link, "odom");
     nh_priv.param<std::string>("map_frame_id",map_link, "map");
+    nh_priv.param<std::string>("laser_frame_id",laser_link, "laser_frame");
 
     double x_init, y_init, theta_init, initial_cov_xx, initial_cov_yy, initial_cov_aa;
     nh_priv.param("initial_pose_x",x_init, 0.0);
@@ -26,6 +25,9 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double
     nh_priv.param("initial_cov_xx",initial_cov_xx, 0.25);
     nh_priv.param("initial_cov_yy",initial_cov_yy, 0.25);
     nh_priv.param("initial_cov_aa",initial_cov_aa, pow(M_PI/12.0,2));
+
+    nh_priv.param("update_min_d", d_thresh_, 0.2);
+    nh_priv.param("update_min_a", a_thresh_, M_PI/6.0);
 
     nh_priv.param("alpha_1",alpha_1, 0.05);
     nh_priv.param("alpha_2",alpha_2, 0.001);
@@ -39,9 +41,13 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double
     nh_priv.param("icp_optimization_epsilon",icp_optimization_epsilon, 0.0000001);
     nh_priv.param("icp_score_scale",icp_score_scale, 100.0);
 
+    nh_priv.param("use_map_topic", use_map_topic_, true);
+    nh_priv.param("first_map_only", first_map_only_, false);
+
     ROS_INFO_STREAM("base_frame_id:"<<base_link);
     ROS_INFO_STREAM("odom_frame_id:"<<odom_link);
     ROS_INFO_STREAM("map_frame_id:"<<map_link);
+    ROS_INFO_STREAM("laser_frame_id:"<<laser_link);
 
     ROS_INFO_STREAM("initial_pose_x:"<<x_init);
     ROS_INFO_STREAM("initial_pose_y:"<<y_init);
@@ -66,12 +72,6 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double
     alpha_2=alpha_2*180/M_PI; // Convert to radian
     alpha_3=alpha_3*M_PI/180; // Convert to radians
 
-    this->laser_sub = nh.subscribe("scan", 1, &EKFnode::laser_callback, this);
-    this->location_undertainty = nh.advertise<visualization_msgs::Marker>("/location_undertainty",1);
-    this->map_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/map_features",1);
-    this->local_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/local_features",1);
-
-    laser_link="/laser_frame";
 
     /****************************
      * NonLinear system model   *
@@ -145,42 +145,6 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double
 
 
 
-    //Bound image by occupied cells.
-    this->map.row(0) = cv::Scalar(0);
-    this->map.row(map.size().width - 1) = cv::Scalar(0);
-    this->map.col(0) = cv::Scalar(0);
-    this->map.col(map.size().height - 1)  = cv::Scalar(0);
-
-    std::vector<cv::Point2f> map_features_cv=features_extractor.mapFeatures(this->map);
-    map_features_aux->resize(map_features_cv.size());
-    map_features->is_dense=false;
-    map_features->header.frame_id=map_link;
-    //=point_type(255, 0, 0);
-
-    double map_scale=0.029999;
-    /*for(unsigned int i=0; i<map_features_cv.size();++i)
-    {
-        point.x=map_scale*map_features_cv[i].x;
-        point.y=-map_scale*map_features_cv[i].y;
-        point.z=0.0;
-        point.intensity=1.0;
-        (*map_features_aux)[i]=point;
-    }*/
-    //sleep(5.0); //GIVE TIME TO TF
-    for(unsigned int i=0; i<map_features_cv.size();++i)
-    {
-        point_type point;
-        point.x=map_scale*map_features_cv[i].x-0.13;
-        point.y=-map_scale*map_features_cv[i].y-0.13;
-        point.z=0.0;
-        point.intensity=1.0;
-        map_features->push_back(point);
-    }
-
-    pcl::VoxelGrid<point_type> voxel_grid;
-    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
-    voxel_grid.setInputCloud (map_features);
-    voxel_grid.filter (*map_features);
 
     // Get Transform from laser to base frame
     tf::StampedTransform laserToBaseTf;
@@ -203,6 +167,24 @@ EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double
     // initialize
     filter_stamp_ = ros::Time::now();
     filter_stamp_old_ = ros::Time::now();
+
+
+
+    if(use_map_topic_)
+    {
+        map_sub_ = nh.subscribe("map", 1, &EKFnode::mapReceived, this);
+        ROS_INFO("Subscribed to map topic.");
+    } else
+    {
+        requestMap();
+    }
+
+    this->laser_sub = nh.subscribe("scan", 1, &EKFnode::laser_callback, this);
+    this->location_undertainty = nh.advertise<visualization_msgs::Marker>("/location_undertainty",1);
+    this->map__pub = nh.advertise<sensor_msgs::PointCloud2>("/map_",1);
+    this->local_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/local_features",1);
+
+
 }
 
 
@@ -239,6 +221,16 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         return;
     }
 
+    // If the robot has moved, update the filter
+
+//    delta.v[0] = pose.v[0] - pf_odom_pose_.v[0];
+//    delta.v[1] = pose.v[1] - pf_odom_pose_.v[1];
+//    delta.v[2] = angle_diff(pose.v[2], pf_odom_pose_.v[2]);
+
+//    // See if we should update the filter
+//    bool update = fabs(delta.v[0]) > d_thresh_ ||
+//                  fabs(delta.v[1]) > d_thresh_ ||
+//                  fabs(delta.v[2]) > a_thresh_;
     tf::StampedTransform laserToBaseTf;
     try
     {
@@ -293,12 +285,12 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     pcl_conversions::toPCL(filter_stamp_, laser_in_base_link->header.stamp);
 
 
-    pcl_conversions::toPCL(filter_stamp_, map_features->header.stamp);
+    pcl_conversions::toPCL(filter_stamp_, map_->header.stamp);
 
     // Compute ICP
     pcl::IterativeClosestPoint<point_type, point_type> icp;
     icp.setInputSource(laser_in_base_link);
-    icp.setInputTarget(map_features);
+    icp.setInputTarget(map_);
     icp.setTransformationEpsilon (icp_optimization_epsilon);
     icp.setMaxCorrespondenceDistance(max_correspondence_distance); //10
 
@@ -490,4 +482,80 @@ void EKFnode::drawCovariance(const Eigen::Matrix2f& covMatrix)
     tempMarker.id = 0;
 
     location_undertainty.publish(tempMarker);
+}
+
+
+void EKFnode::mapReceived(const nav_msgs::OccupancyGridConstPtr& msg)
+{
+    if( first_map_only_ && first_map_received_ )
+    {
+        return;
+    }
+
+    handleMapMessage( *msg );
+
+    first_map_received_ = true;
+}
+
+void EKFnode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
+{
+    ROS_INFO("Received a %d X %d map @ %.3f m/pix\n",
+             msg.info.width,
+             msg.info.height,
+             msg.info.resolution);
+    convertMap(msg);
+}
+
+void EKFnode::requestMap()
+{
+    //boost::recursive_mutex::scoped_lock ml(configuration_mutex_);
+
+    // get map via RPC
+    nav_msgs::GetMap::Request  req;
+    nav_msgs::GetMap::Response resp;
+    ROS_INFO("Requesting the map...");
+    while(!ros::service::call("static_map", req, resp)&&nh_priv.ok())
+    {
+        ROS_WARN("Request for map failed; trying again...");
+        ros::Duration d(0.5);
+        d.sleep();
+    }
+    handleMapMessage( resp.map );
+}
+
+void EKFnode::convertMap( const nav_msgs::OccupancyGrid& map_msg)
+{
+    map_=map_t_ptr (new map_t());
+    ROS_ASSERT(map_);
+    map_->is_dense=false;
+    map_->header.frame_id=map_msg.header.frame_id;
+    double map_size_x = map_msg.info.width;
+    double map_size_y = map_msg.info.height;
+    double map_scale = map_msg.info.resolution;
+    double map_origin_x = map_msg.info.origin.position.x + (map_size_x / 2.0) * map_scale;
+    double map_origin_y = map_msg.info.origin.position.y + (map_size_y / 2.0) * map_scale;
+
+    // Convert to player format
+    for(int i=0;i<map_size_x; ++i) //Cols
+    {
+        for(int j=0;j<map_size_y; ++j) //Rows
+        {
+            if(map_msg.data[i+j*map_size_x] > 0.0)
+            {
+                point_type point;
+                point.x=map_scale*i+map_msg.info.origin.position.x;
+                point.y=map_scale*j+map_msg.info.origin.position.y;
+                point.z=0.0;
+                point.intensity=1.0;
+                map_->push_back(point);
+            }
+        }
+    }
+    std::cout << "map size:"<< map_->size() << std::endl;
+
+//    pcl::VoxelGrid<point_type> voxel_grid;
+//    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
+//    voxel_grid.setInputCloud (map_);
+//    voxel_grid.filter (*map_);
+
 }
