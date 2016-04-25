@@ -2,7 +2,6 @@
 
 EKFnode::EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double voxel_grid_size_)
     : nh_priv("~"),
-      map(pmap.clone()),
       listener(new tf::TransformListener(ros::Duration(10.0))),
       map_(new pcl::PointCloud<point_type>()),
       laser(new pcl::PointCloud<point_type>()),
@@ -221,16 +220,25 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         return;
     }
 
+    // Where was the robot when this scan was taken?
+    tf::Stamped<tf::Pose> pose;
+    if(!getOdomPose(latest_odom_pose_, pose.v[0], pose.v[1], pose.v[2],
+                    laser_scan->header.stamp, base_frame_id_))
+    {
+      ROS_ERROR("Couldn't determine robot's pose associated with laser scan");
+      return;
+    }
+
     // If the robot has moved, update the filter
 
-//    delta.v[0] = pose.v[0] - pf_odom_pose_.v[0];
-//    delta.v[1] = pose.v[1] - pf_odom_pose_.v[1];
-//    delta.v[2] = angle_diff(pose.v[2], pf_odom_pose_.v[2]);
+    //    delta.v[0] = pose.v[0] - pf_odom_pose_.v[0];
+    //    delta.v[1] = pose.v[1] - pf_odom_pose_.v[1];
+    //    delta.v[2] = angle_diff(pose.v[2], pf_odom_pose_.v[2]);
 
-//    // See if we should update the filter
-//    bool update = fabs(delta.v[0]) > d_thresh_ ||
-//                  fabs(delta.v[1]) > d_thresh_ ||
-//                  fabs(delta.v[2]) > a_thresh_;
+    //    // See if we should update the filter
+    //    bool update = fabs(delta.v[0]) > d_thresh_ ||
+    //                  fabs(delta.v[1]) > d_thresh_ ||
+    //                  fabs(delta.v[2]) > a_thresh_;
     tf::StampedTransform laserToBaseTf;
     try
     {
@@ -553,9 +561,33 @@ void EKFnode::convertMap( const nav_msgs::OccupancyGrid& map_msg)
     }
     std::cout << "map size:"<< map_->size() << std::endl;
 
-//    pcl::VoxelGrid<point_type> voxel_grid;
-//    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
-//    voxel_grid.setInputCloud (map_);
-//    voxel_grid.filter (*map_);
+    pcl::VoxelGrid<point_type> voxel_grid;
+    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
+    voxel_grid.setInputCloud (map_);
+    voxel_grid.filter (*map_);
 
+}
+
+bool EKFnode::getOdomPose(tf::Stamped<tf::Pose>& odom_pose,
+                          double& x, double& y, double& yaw,
+                          const ros::Time& t, const std::string& f)
+{
+    // Get the robot's pose
+    tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
+                                               tf::Vector3(0,0,0)), t, f);
+    try
+    {
+        listener->transformPose(odom_link, ident, odom_pose);
+    }
+    catch(tf::TransformException e)
+    {
+        ROS_WARN("Failed to compute odom pose, skipping scan (%s)", e.what());
+        return false;
+    }
+    x = odom_pose.getOrigin().x();
+    y = odom_pose.getOrigin().y();
+    double pitch,roll;
+    odom_pose.getBasis().getEulerYPR(yaw, pitch, roll);
+
+    return true;
 }

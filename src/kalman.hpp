@@ -128,7 +128,9 @@ class EKFnode
     double d_thresh_, a_thresh_;
     double voxel_grid_size;
 
-
+    //paramater to store latest odom pose
+    tf::Stamped<tf::Pose> latest_odom_pose_;
+    tf::Stamped<tf::Pose> filter_odom_pose_;
     // ICP and vision stuff
     FeaturesExtractor features_extractor;
     double max_correspondence_distance;
@@ -150,7 +152,10 @@ class EKFnode
     void mapReceived(const nav_msgs::OccupancyGridConstPtr& msg);
     void handleMapMessage(const nav_msgs::OccupancyGrid& msg);
     void convertMap( const nav_msgs::OccupancyGrid& map_msg );
-
+    // Helper to get odometric pose from transform system
+    bool getOdomPose(tf::Stamped<tf::Pose>& pose,
+                     double& x, double& y, double& yaw,
+                     const ros::Time& t, const std::string& f);
 public:
 
     void publishFeatures()
