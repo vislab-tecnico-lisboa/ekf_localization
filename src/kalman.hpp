@@ -36,6 +36,7 @@
 #include <pcl/registration/icp_nl.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl_conversions/pcl_conversions.h>
 
 // Bayesian filtering library
 #include <filter/extendedkalmanfilter.h>
@@ -45,83 +46,42 @@
 #include <model/linearanalyticmeasurementmodel_gaussianuncertainty.h>
 
 #include "bayesian_filtering/nonlinearanalyticconditionalgaussianmobile.h"
-struct rangle
-{
-    double range, angle;
-    rangle(double r, double a) : range(r), angle(a) {}
-};
+#include <laser_geometry/laser_geometry.h>
 
-
-class SensorModel
-{
-    typedef pcl::PointXYZI point_type;
-    pcl::PointCloud<point_type>::Ptr map_;
-
-    double beamRangeFinderModel(const pcl::PointCloud<point_type>::Ptr & laser_scan)
-    {
-        for(int i=0; i<laser_scan->size();++i)
-        {
-            
-        }
-    }
-
-public:
-    SensorModel(const pcl::PointCloud<point_type>::Ptr & map) : map_(map)
-    {
-
-    }
-
-
-};
 
 class EKFnode
 {
-    typedef pcl::PointXYZI point_type;
+    typedef pcl::PointXYZ point_type;
     typedef pcl::PointCloud<point_type> map_t;
     typedef map_t::Ptr map_t_ptr;
 
     // ROS stuff
     ros::NodeHandle nh_priv;
     tf::Transformer transformer_;
-    ros::Time odom_stamp_, laser_stamp_, filter_stamp_,odom_init_stamp_,laser_init_stamp_,filter_stamp_old_;
+    ros::Time odom_last_stamp_, laser_last_stamp_, odom_init_stamp_,laser_init_stamp_, filter_stamp_;
 
     boost::shared_ptr<tf::TransformListener> listener;
-    Eigen::Matrix4f laserToMapEigen;
-    Eigen::Matrix4f laserToBaseEigen;
     std::string base_link;
     std::string odom_link;
     std::string map_link;
     std::string laser_link;
     bool use_map_topic_, first_map_only_,first_map_received_;
-    ros::Subscriber cmd_sub;
     ros::Subscriber laser_sub;
-    ros::Subscriber bpgt_sub;
-    ros::Publisher location_undertainty;
-    ros::Publisher map__pub;
-    ros::Publisher local_features_pub;
     ros::Subscriber map_sub_;
+    ros::Publisher location_undertainty;
+    ros::Publisher map_pub_;
+    ros::Publisher local_features_pub;
+
 
     tf::TransformBroadcaster tf_broadcaster;
-    tf::Transform latest_tf_;
     pcl::PointCloud<point_type>::Ptr laser;
-    ros::Time laser_time;
-
+    laser_geometry::LaserProjection projector_;
     boost::shared_ptr<BFL::ExtendedKalmanFilter> filter;
     boost::shared_ptr<BFL::NonLinearAnalyticConditionalGaussianMobile> sys_pdf;
     boost::shared_ptr<BFL::AnalyticSystemModelGaussianUncertainty> sys_model;
     boost::shared_ptr<BFL::LinearAnalyticConditionalGaussian> meas_pdf;
     boost::shared_ptr<BFL::LinearAnalyticMeasurementModelGaussianUncertainty> meas_model;
 
-    cv::Vec3d X;           //!< predicted state (x'(k)): x(k)=A*x(k-1)+B*u(k)
-
-    cv::Matx<double,3,3> F;   				//!< state transition matrix (F)
-    cv::Matx<double,3,3> I;   				//!< state transition matrix (F)
-    cv::Matx<double,3,3> H;  				//!< measurement matrix (H)
-    cv::Matx<double,3,3> Q;					//!< process noise covariance matrix (Q)
-    //cv::Mat measurementNoiseCov;//!< measurement noise covariance matrix (R)
-    cv::Matx<double,3,3> K;               //!< Kalman gain matrix (K(k)): K(k)=P'(k)*Ht*inv(H*P'(k)*Ht+R)
-    cv::Matx<double,3,3> P;
-    cv::Matx<double,3,3> R;
     pcl::PointCloud<point_type>::Ptr map_;
 
     double alpha_1, alpha_2, alpha_3, alpha_4;
@@ -139,9 +99,9 @@ class EKFnode
     double ransac_outlier_threshold;
     double icp_optimization_epsilon;
     double icp_score_scale;
-
+    double covariance_marker_scale_;
     // aux vars
-    bool odom_active_, laser_active_, odom_initializing_,laser_initializing_, filter_initialized_;
+    bool odom_active_, laser_active_, odom_initialized_,laser_initialized_;
 
     BFL::ColumnVector last_laser_pose_;
     void laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg);
@@ -156,38 +116,26 @@ class EKFnode
     bool getOdomPose(tf::Stamped<tf::Pose>& pose,
                      double& x, double& y, double& yaw,
                      const ros::Time& t, const std::string& f);
-public:
 
-    void publishFeatures()
-    {
-        map__pub.publish(map_);
-    }
-
-    cv::Vec3d getX()
-    {
-        return X;
-    }
-
-    cv::Matx<double,3,3> getP()
-    {
-        return P;
-    }
-
-
-
-    EKFnode(ros::NodeHandle& nh, const cv::Mat& pmap, int spin_rate, double voxel_grid_size_=0.005);
     void broadcast(const ros::Time & broad_cast_time);
-
     bool predict();
-
-    enum {OCCUPIED = 0, FREE = 255};
-    const static int CV_TYPE = CV_64F;
 
     void angleOverflowCorrect(double& a)
     {
         while ((a) >  M_PI) a -= 2*M_PI;
         while ((a) < -M_PI) a += 2*M_PI;
     }
+
+    void publishFeatures()
+    {
+        map_pub_.publish(map_);
+    }
+    enum {OCCUPIED = 0, FREE = 255};
+    const static int CV_TYPE = CV_64F;
+
+public:
+
+    EKFnode(ros::NodeHandle& nh, int spin_rate, double voxel_grid_size_=0.005);
 
     void spin()
     {

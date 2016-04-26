@@ -15,6 +15,7 @@ find_package(catkin REQUIRED
   std_msgs
   tf
   tf_conversions
+  laser_geometry
 pcl_ros)
 
 catkin_package(

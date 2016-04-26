@@ -1,28 +1,20 @@
-#include <iostream>
-#include <opencv2/opencv.hpp>
-
 #include "kalman.hpp"
 
 #include "ros/ros.h"
 
-const std::string name = "Kalman";
-
 int main(int argc, char *argv[])
 {
-    ros::init(argc, argv, name);
+    ros::init(argc, argv, "ekf_localization_node");
     ros::NodeHandle node;
     ros::NodeHandle priv_node("~");
     if(argc != 2)
         std::cout << "No Input Image!" << std::endl;
 
+    double spin_rate;
 
-    //const cv::Mat map = cv::imread(argv[1], CV_LOAD_IMAGE_ANYCOLOR);
-    const cv::Mat map = cv::imread(argv[1]);
-    std::cout << argv[1]<< std::endl;
-    const int spin_rate = 20;
+    priv_node.param("spin",spin_rate, 20.0);
 
-
-    EKFnode k(node,map,spin_rate);
+    EKFnode k(node,spin_rate);
 
     ros::Rate rate(spin_rate);
     while(ros::ok())
