@@ -40,7 +40,6 @@
 #    OPTIONAL after_deploy
 
 ################################################################################
-
 # Use ubuntu trusty (14.04) with sudo privileges.
 dist: trusty
 sudo: required
