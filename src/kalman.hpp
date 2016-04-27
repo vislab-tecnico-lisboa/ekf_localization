@@ -57,6 +57,8 @@ class EKFnode
 
     // ROS stuff
     ros::NodeHandle nh_priv;
+    ros::NodeHandle nh_;
+
     tf::Transformer transformer_;
     ros::Time odom_last_stamp_, laser_last_stamp_, odom_init_stamp_,laser_init_stamp_, filter_stamp_;
 
@@ -71,6 +73,7 @@ class EKFnode
     ros::Publisher location_undertainty;
     ros::Publisher map_pub_;
     ros::Publisher local_features_pub;
+    ros::Timer timer_;
 
 
     tf::TransformBroadcaster tf_broadcaster;
@@ -112,10 +115,6 @@ class EKFnode
     void mapReceived(const nav_msgs::OccupancyGridConstPtr& msg);
     void handleMapMessage(const nav_msgs::OccupancyGrid& msg);
     void convertMap( const nav_msgs::OccupancyGrid& map_msg );
-    // Helper to get odometric pose from transform system
-    bool getOdomPose(tf::Stamped<tf::Pose>& pose,
-                     double& x, double& y, double& yaw,
-                     const ros::Time& t, const std::string& f);
 
     void broadcast(const ros::Time & broad_cast_time);
     bool predict();
@@ -135,23 +134,8 @@ class EKFnode
 
 public:
 
-    EKFnode(ros::NodeHandle& nh, int spin_rate, double voxel_grid_size_=0.005);
+    EKFnode(const ros::NodeHandle& nh, const double & spin_rate, const double & voxel_grid_size_=0.005);
 
-    void spin()
-    {
-        //broadcast();
-        predict();
-        Eigen::Matrix2f covMatrix;
-        BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
-        BFL::SymmetricMatrix estimated_cov=posterior->CovarianceGet();
-
-        covMatrix(0,0)=estimated_cov(1,1);
-        covMatrix(0,1)=estimated_cov(1,2);
-
-        covMatrix(1,0)=estimated_cov(2,1);
-        covMatrix(1,1)=estimated_cov(2,2);
-        drawCovariance(covMatrix);
-        publishFeatures();
-    }
+    void spin(const ros::TimerEvent& e);
 };
 

@@ -1,16 +1,17 @@
 #include "kalman.hpp"
 
-EKFnode::EKFnode(ros::NodeHandle& nh, int spin_rate, double voxel_grid_size_)
-    : nh_priv("~"),
-      listener(new tf::TransformListener(ros::Duration(10.0))),
-      map_(new pcl::PointCloud<point_type>()),
-      laser(new pcl::PointCloud<point_type>()),
-      voxel_grid_size(voxel_grid_size_),
-      odom_active_(false),
-      laser_active_(false),
-      odom_initialized_(false),
-      laser_initialized_(false),
-      first_map_received_(false)
+EKFnode::EKFnode(const ros::NodeHandle& nh, const double & spin_rate, const double & voxel_grid_size_) :
+    nh_(nh),
+    nh_priv("~"),
+    listener(new tf::TransformListener(ros::Duration(10.0))),
+    map_(new pcl::PointCloud<point_type>()),
+    laser(new pcl::PointCloud<point_type>()),
+    voxel_grid_size(voxel_grid_size_),
+    odom_active_(false),
+    laser_active_(false),
+    odom_initialized_(false),
+    laser_initialized_(false),
+    first_map_received_(false)
 {
     nh_priv.param<std::string>("base_frame_id",base_link, "base_link");
     nh_priv.param<std::string>("odom_frame_id",odom_link, "odom");
@@ -148,24 +149,20 @@ EKFnode::EKFnode(ros::NodeHandle& nh, int spin_rate, double voxel_grid_size_)
     filter=boost::shared_ptr<BFL::ExtendedKalmanFilter> (new BFL::ExtendedKalmanFilter(&prior));
 
 
-    // initialize
-    filter_stamp_ = ros::Time::now();
-
-    broadcast(filter_stamp_);
-
     if(use_map_topic_)
     {
-        map_sub_ = nh.subscribe("map", 1, &EKFnode::mapReceived, this);
+        map_sub_ = nh_.subscribe("map", 1, &EKFnode::mapReceived, this);
         ROS_INFO("Subscribed to map topic.");
     } else
     {
         requestMap();
     }
+    timer_ = nh_.createTimer(ros::Duration(1.0/std::max(spin_rate,1.0)), &EKFnode::spin, this);
 
-    this->laser_sub = nh.subscribe("scan", 1, &EKFnode::laser_callback, this);
-    this->location_undertainty = nh.advertise<visualization_msgs::Marker>("/location_undertainty",1);
-    this->map_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/map_",1);
-    this->local_features_pub = nh.advertise<sensor_msgs::PointCloud2>("/local_features",1);
+    laser_sub = nh_.subscribe("scan", 1, &EKFnode::laser_callback, this);
+    location_undertainty = nh_.advertise<visualization_msgs::Marker>("/location_undertainty",1);
+    map_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("/map_",1);
+    local_features_pub = nh_.advertise<sensor_msgs::PointCloud2>("/local_features",1);
 }
 
 
@@ -177,7 +174,7 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         {
             laser_initialized_ = true;
             laser_last_stamp_ = msg->header.stamp;
-
+            laser_init_stamp_ = msg->header.stamp;
             ROS_INFO("Initializing Laser sensor");
 
         }
@@ -312,13 +309,14 @@ bool EKFnode::predict()
 {
     ros::Time odom_time=ros::Time::now();
 
+
     if (!odom_active_)
     {
         if (!odom_initialized_)
         {
             odom_initialized_ = true;
             odom_last_stamp_ = odom_time;
-
+            odom_init_stamp_ = odom_time;
             ROS_INFO("Initializing Odom sensor");
 
         }
@@ -348,9 +346,12 @@ bool EKFnode::predict()
     }
     catch (tf::TransformException &ex)
     {
-        //ROS_WARN("%s",ex.what());
+        //odom_initialized_=false;
+
+        ROS_WARN("%s",ex.what());
         return false;
     }
+
 
     // Get control input
     double dx=baseDeltaTf.getOrigin().getX();
@@ -433,9 +434,9 @@ void EKFnode::broadcast(const ros::Time & broad_cast_time)
         tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
                                               broad_cast_time,
                                               base_link); // base to map
-        this->listener->transformPose(odom_link,
-                                      tmp_tf_stamped,
-                                      odom_to_map);
+        listener->transformPose(odom_link,
+                                tmp_tf_stamped,
+                                odom_to_map);
     }
     catch(tf::TransformException)
     {
@@ -444,7 +445,7 @@ void EKFnode::broadcast(const ros::Time & broad_cast_time)
     }
 
     tf::Transform latest_tf_ = tf::Transform(tf::Quaternion(odom_to_map.getRotation()),
-                               tf::Point(odom_to_map.getOrigin()));
+                                             tf::Point(odom_to_map.getOrigin()));
 
     // We want to send a transform that is good up until a
     // tolerance time so that odom can be used
@@ -566,26 +567,37 @@ void EKFnode::convertMap( const nav_msgs::OccupancyGrid& map_msg)
 
 }
 
-bool EKFnode::getOdomPose(tf::Stamped<tf::Pose>& odom_pose,
-                          double& x, double& y, double& yaw,
-                          const ros::Time& t, const std::string& f)
-{
-    // Get the robot's pose
-    tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
-                                               tf::Vector3(0,0,0)), t, f);
-    try
-    {
-        listener->transformPose(odom_link, ident, odom_pose);
-    }
-    catch(tf::TransformException e)
-    {
-        ROS_WARN("Failed to compute odom pose, skipping scan (%s)", e.what());
-        return false;
-    }
-    x = odom_pose.getOrigin().x();
-    y = odom_pose.getOrigin().y();
-    double pitch,roll;
-    odom_pose.getBasis().getEulerYPR(yaw, pitch, roll);
 
-    return true;
+
+void EKFnode::spin(const ros::TimerEvent& e)
+{
+
+    // initial value for filter stamp; keep this stamp when no sensors are active
+    filter_stamp_ = ros::Time::now();
+
+    predict();
+
+    // Check callbacks
+    ros::spinOnce();
+
+    // only update filter when one of the sensors is active
+    if (odom_active_ || laser_active_)
+    {
+        if (odom_active_)  filter_stamp_ = std::min(filter_stamp_, odom_last_stamp_);
+        if (laser_active_)   filter_stamp_ = std::min(filter_stamp_, laser_last_stamp_);
+
+        // Publish stuff
+        Eigen::Matrix2f covMatrix;
+        BFL::Pdf<BFL::ColumnVector> * posterior = filter->PostGet();
+        BFL::SymmetricMatrix estimated_cov=posterior->CovarianceGet();
+
+        covMatrix(0,0)=estimated_cov(1,1);
+        covMatrix(0,1)=estimated_cov(1,2);
+
+        covMatrix(1,0)=estimated_cov(2,1);
+        covMatrix(1,1)=estimated_cov(2,2);
+        drawCovariance(covMatrix);
+
+        publishFeatures();
+    }
 }

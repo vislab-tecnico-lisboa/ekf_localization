@@ -16,14 +16,7 @@ int main(int argc, char *argv[])
 
     EKFnode k(node,spin_rate);
 
-    ros::Rate rate(spin_rate);
-    while(ros::ok())
-    {
-        ros::spinOnce();
-        k.spin();
-        rate.sleep();
-    }
-    ros::shutdown();
+    ros::spin();
 
     return 0;
 }

@@ -7,7 +7,7 @@
   <param name="use_sim_time" value="true" />
 
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find advanced_robotics)/rviz/amcl.rviz" />
-  <node name="odom_node" pkg="ekf_localization" type="odom_node" output="screen"/>
+
   <node name="ekf_localization_node" pkg="ekf_localization" type="ekf_localization_test" output="screen" args="$(arg map_file).pgm">
     <rosparam file="$(find ekf_localization)/config/parameters.yaml" command="load" />
   </node>
