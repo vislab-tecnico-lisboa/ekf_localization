@@ -40,11 +40,5 @@ include_directories(
 add_library(pose_estimation_ekf src/bayesian_filtering/nonlinearanalyticconditionalgaussianmobile.cpp)
 target_link_libraries(pose_estimation_ekf ${BFL_LIBRARIES} )
 
-add_executable(odom_node src/odom.cpp)
-target_link_libraries(odom_node ${catkin_LIBRARIES} ${Boost_LIBRARIES})
-
-#add_executable(ekf_localization_node src/bayesian_filtering/test/BayesianFilterNode.cpp src/bayesian_filtering/nonlinearanalyticconditionalgaussianmobile.cpp)
-#target_link_libraries(ekf_localization_node pose_estimation_ekf ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${BFL_LIBRARIES} )
-
-add_executable(ekf_localization_test src/main.cpp src/kalman.cpp src/featuresextractor.cpp)
-target_link_libraries(ekf_localization_test pose_estimation_ekf ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${Boost_LIBRARIES} ${BFL_LIBRARIES})
+add_executable(ekf_localization_node src/main.cpp src/kalman.cpp src/featuresextractor.cpp)
+target_link_libraries(ekf_localization_node pose_estimation_ekf ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${Boost_LIBRARIES} ${BFL_LIBRARIES})

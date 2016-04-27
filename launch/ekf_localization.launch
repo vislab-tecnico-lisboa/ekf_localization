@@ -6,9 +6,9 @@
 
   <param name="use_sim_time" value="true" />
 
-  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find advanced_robotics)/rviz/amcl.rviz" />
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ekf_localization)/rviz/ekf_localization.rviz" />
 
-  <node name="ekf_localization_node" pkg="ekf_localization" type="ekf_localization_test" output="screen" args="$(arg map_file).pgm">
+  <node name="ekf_localization_node" pkg="ekf_localization" type="ekf_localization_node" output="screen" args="$(arg map_file).pgm">
     <rosparam file="$(find ekf_localization)/config/parameters.yaml" command="load" />
   </node>
   <node name="map_server" pkg="map_server" type="map_server"  args="$(arg map_file).yaml" />
