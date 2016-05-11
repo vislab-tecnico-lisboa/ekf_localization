@@ -74,7 +74,7 @@ class EKFnode
     ros::Publisher map_pub_;
     ros::Publisher local_features_pub;
     ros::Timer timer_;
-
+    int laser_max_beams_;
 
     tf::TransformBroadcaster tf_broadcaster;
     pcl::PointCloud<point_type>::Ptr laser;
@@ -108,7 +108,6 @@ class EKFnode
 
     BFL::ColumnVector last_laser_pose_;
     void laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg);
-    void sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_);
     void drawCovariance(const Eigen::Matrix2f& covMatrix);
     void drawFeatures();
     void requestMap();

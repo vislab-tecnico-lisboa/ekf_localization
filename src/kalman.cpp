@@ -40,6 +40,7 @@ EKFnode::EKFnode(const ros::NodeHandle& nh, const double & spin_rate, const doub
     nh_priv.param("ransac_outlier_threshold",ransac_outlier_threshold, 0.1);
     nh_priv.param("icp_optimization_epsilon",icp_optimization_epsilon, 0.0000001);
     nh_priv.param("icp_score_scale",icp_score_scale, 100.0);
+    nh_priv.param("laser_max_beams",laser_max_beams_, 30);
 
     nh_priv.param("use_map_topic", use_map_topic_, true);
     nh_priv.param("first_map_only", first_map_only_, false);
@@ -73,6 +74,7 @@ EKFnode::EKFnode(const ros::NodeHandle& nh, const double & spin_rate, const doub
     ROS_INFO_STREAM("ransac_outlier_threshold:"<<ransac_outlier_threshold);
     ROS_INFO_STREAM("icp_optimization_epsilon:"<<icp_optimization_epsilon);
     ROS_INFO_STREAM("icp_score_scale:"<<icp_score_scale);
+    ROS_INFO_STREAM("laser_max_beams:"<<laser_max_beams_);
 
     ROS_INFO_STREAM("covariance_marker_scale:"<<covariance_marker_scale_);
 
@@ -162,7 +164,7 @@ EKFnode::EKFnode(const ros::NodeHandle& nh, const double & spin_rate, const doub
     laser_sub = nh_.subscribe("scan", 1, &EKFnode::laser_callback, this);
     location_undertainty = nh_.advertise<visualization_msgs::Marker>("/location_undertainty",1);
     map_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("/map_",1);
-    local_features_pub = nh_.advertise<sensor_msgs::PointCloud2>("/local_features",1);
+    local_features_pub = nh_.advertise<sensor_msgs::PointCloud2>("/laser_aligned",1);
 }
 
 
@@ -212,6 +214,7 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
         ROS_WARN("%s",ex.what());
         return;
     }
+
     // If the robot has moved, update the filter
 
     double dx=baseDeltaTf.getOrigin().getX();
@@ -238,19 +241,20 @@ void EKFnode::laser_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
     // Remove NAN
     pcl::PointIndices::Ptr inliers (new pcl::PointIndices ());
     pcl::removeNaNFromPointCloud((*laser), *laser,inliers->indices);
+    pcl::PointIndices::Ptr toProcessIndices (new pcl::PointIndices ());
 
-    // Downsample
-    pcl::VoxelGrid<point_type> voxel_grid;
-    voxel_grid.setLeafSize (voxel_grid_size, voxel_grid_size, voxel_grid_size);
-    voxel_grid.setInputCloud (laser);
-    voxel_grid.filter (*laser);
-
+    int step = (laser->size() - 1) / (laser_max_beams_ - 1);
+    for (int i = 0; i < laser->size(); i += step)
+    {
+        toProcessIndices->indices.push_back(i);
+    }
 
     pcl_conversions::toPCL(msg->header.stamp, map_->header.stamp);
 
     // Compute ICP
     pcl::IterativeClosestPoint<point_type, point_type> icp;
     icp.setInputSource(laser);
+    icp.setIndices(toProcessIndices);
     icp.setInputTarget(map_);
     icp.setTransformationEpsilon (icp_optimization_epsilon);
     icp.setMaxCorrespondenceDistance(max_correspondence_distance); //10
@@ -352,7 +356,6 @@ bool EKFnode::predict()
         return false;
     }
 
-
     // Get control input
     double dx=baseDeltaTf.getOrigin().getX();
     double dy=baseDeltaTf.getOrigin().getY();
@@ -411,10 +414,7 @@ bool EKFnode::predict()
 }
 
 
-void EKFnode::sendTransform(const tf::Transform & transform_, const ros::Time & time_stamp_, const std::string & target_frame_, const std::string & origin_frame_)
-{
-    tf_broadcaster.sendTransform(tf::StampedTransform(transform_, time_stamp_, target_frame_, origin_frame_));
-}
+
 
 void EKFnode::broadcast(const ros::Time & broad_cast_time)
 {
@@ -450,7 +450,7 @@ void EKFnode::broadcast(const ros::Time & broad_cast_time)
     // We want to send a transform that is good up until a
     // tolerance time so that odom can be used
     tf::StampedTransform tmp_tf_stamped(latest_tf_.inverse(),
-                                        broad_cast_time,//+ros::Duration(0.1),
+                                        broad_cast_time+ros::Duration(0.1),
                                         map_link, odom_link);
     tf_broadcaster.sendTransform(tmp_tf_stamped);
 
